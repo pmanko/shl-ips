@@ -16,8 +16,10 @@
     Spinner
   } from '@sveltestrap/sveltestrap';
   import type FHIRDataService from '$lib/utils/FHIRDataService';
+  import type { Patient } from 'fhir/r4';
   import type { IAuthService } from '$lib/utils/types';
-  import { LOCAL_DEMO_MODE, SOURCE_NAME_SYSTEM } from '$lib/config/config';
+  import { SOURCE_NAME_SYSTEM } from '$lib/config/config';
+  import { isLocalDemoMode } from '$lib/utils/localDemoPersonas';
   import {
     getFriendlySourceName,
     isPatientCollection
@@ -139,8 +141,10 @@
   $: hasSourceSubsetFilter =
     pooledSources.length > 0 && activeIncludedSources.length < pooledSources.length;
 
+  const DEMO_MODE = isLocalDemoMode();
+
   $: patientDisplayName = (() => {
-    const pat = $masterPatient?.resource;
+    const pat = $masterPatient?.resource as Patient | undefined;
     if (pat?.name?.[0]) {
       const given = (pat.name[0].given || []).join(' ');
       const family = pat.name[0].family || '';
@@ -150,14 +154,15 @@
   })();
 
   $: patientBirthDate =
-    $masterPatient?.resource?.birthDate || (activePersona === 'leo' ? '2019-08-22' : '1962-03-14');
+    ($masterPatient?.resource as Patient | undefined)?.birthDate ||
+    (activePersona === 'leo' ? '2019-08-22' : '1962-03-14');
 
   function getHistoryStorageKey(keyId: string): string {
     return `wahs:sveltekit:chatHistory:v3:${keyId}`;
   }
 
   function currentSessionKey(): string {
-    return LOCAL_DEMO_MODE ? activePersona : ($masterPatient?.resource?.id || 'authenticated');
+    return DEMO_MODE ? activePersona : ($masterPatient?.resource?.id || 'authenticated');
   }
 
   function loadSavedHistory(keyId: string) {
@@ -214,14 +219,14 @@
   }
 
   /**
-   * In LOCAL_DEMO_MODE (when no HAPI/fhir-auth server is running), construct the inline
+   * In DEMO_MODE (when no HAPI/fhir-auth server is running), construct the inline
    * FHIR R4 Bundle from `fhirDataService` stamped with `wahealthsummary-source-name` tags
    * so `wahs-engine` applies identical `chart_scope` filtering and `[N]` citation mapping.
    * In live HAPI/fhir-auth mode, `/api/chat` omits `fhir_bundle` so `wahs-engine` fetches
    * directly from `fhir-auth` using the caller's Keycloak Bearer JWT.
    */
   function assembleLocalDemoBundleIfNeeded(): Record<string, any> | undefined {
-    if (!LOCAL_DEMO_MODE) {
+    if (!DEMO_MODE) {
       return undefined;
     }
     const cols = fhirDataService.getAllResourceCollections();
@@ -497,10 +502,9 @@
       lines.push(m.content);
       lines.push('');
     }
-    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' });
     download(
       `wahs-chat-${currentSessionKey()}-${new Date().toISOString().slice(0, 10)}.md`,
-      blob
+      lines.join('\n')
     );
   }
 
@@ -576,7 +580,7 @@
         ];
 
   onMount(async () => {
-    if (LOCAL_DEMO_MODE && (authService as any).getDemoPersona) {
+    if (DEMO_MODE && (authService as any).getDemoPersona) {
       activePersona = (authService as any).getDemoPersona();
     }
     loadSavedHistory(currentSessionKey());
@@ -656,7 +660,7 @@
     </p>
   </Col>
   <Col md="5" class="d-flex justify-content-md-end align-items-center gap-2 mt-2 mt-md-0 flex-wrap">
-    {#if LOCAL_DEMO_MODE}
+    {#if DEMO_MODE}
       <div class="btn-group btn-group-sm" role="group" aria-label="Demo patient switcher">
         <button
           type="button"

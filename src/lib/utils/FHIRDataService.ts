@@ -15,10 +15,9 @@ import { get, writable, derived, type Readable, type Writable } from "svelte/sto
 import { ResourceCollection } from "$lib/utils/ResourceCollection";
 import {
   INTERMEDIATE_FHIR_SERVER_BASE,
-  IDENTIFIER_SYSTEM,
-  LOCAL_DEMO_MODE
+  IDENTIFIER_SYSTEM
 } from "$lib/config/config";
-import { getLocalDemoPersonaFixture } from "$lib/utils/localDemoPersonas";
+import { getLocalDemoPersonaFixture, isLocalDemoMode } from "$lib/utils/localDemoPersonas";
 import type { IAuthService, ResourceRetrieveEvent, UserDemographics } from "$lib/utils/types";
 import { ResourceHelper } from "$lib/utils/ResourceHelper";
 import type { Bundle, BundleEntry, Patient, Resource } from "fhir/r4";
@@ -139,7 +138,7 @@ export class FHIRDataService {
   }
 
   async loadUserData(): Promise<void> {
-    if (LOCAL_DEMO_MODE || !INTERMEDIATE_FHIR_SERVER_BASE) {
+    if (isLocalDemoMode()) {
       if (this.getAllResourceCollections().length === 0) {
         await this.loadLocalDemoPersona();
       }
@@ -638,7 +637,7 @@ export class FHIRDataService {
   }
 
   async deleteDataset(category: string, method: string, source: string) {
-    if (LOCAL_DEMO_MODE || !INTERMEDIATE_FHIR_SERVER_BASE) {
+    if (isLocalDemoMode()) {
       this.removeDatasetFromUserResources(category, method, source);
       return;
     }
@@ -740,7 +739,7 @@ export class FHIRDataService {
     // Finish pre-upload normalization (add consistent fullUrls and use them to update all references)
     const finalEntries = finalizeForUpload(renormalizedConfirmedImportEntries);
 
-    if (LOCAL_DEMO_MODE || !INTERMEDIATE_FHIR_SERVER_BASE) {
+    if (isLocalDemoMode()) {
       const localResources = finalEntries
         .map((e: any) => e.resource)
         .filter((r: any): r is Resource => Boolean(r && r.resourceType));

@@ -8,6 +8,13 @@ import {
 } from '$lib/config/config';
 import { CATEGORIES, METHODS } from '$lib/config/tags';
 
+export function isLocalDemoMode(): boolean {
+  const winVal =
+    typeof window !== 'undefined' ? (window as any).__env?.VITE_LOCAL_DEMO : undefined;
+  const raw = winVal ?? import.meta.env?.VITE_LOCAL_DEMO;
+  return raw === '1' || raw === 'true';
+}
+
 export interface LocalDemoPersonaFixture {
   masterPatient: Patient;
   collections: Array<{

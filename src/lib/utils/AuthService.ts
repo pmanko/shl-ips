@@ -3,9 +3,9 @@ import {
   AUTH_CLIENT_ID,
   AUTH_REDIRECT_URI,
   AUTH_SILENT_REDIRECT_URI,
-  AUTH_POST_LOGOUT_URI,
-  LOCAL_DEMO_MODE
+  AUTH_POST_LOGOUT_URI
 } from '$lib/config/config';
+import { isLocalDemoMode } from '$lib/utils/localDemoPersonas';
 import { derived, writable, type Writable, type Readable } from 'svelte/store';
 import { type User, UserManager } from 'oidc-client-ts';
 import { INSTANCE_CONFIG } from '$lib/config/instance_config';
@@ -63,7 +63,8 @@ export class AuthService implements IAuthService {
   public readonly error: Readable<any> = derived(this._error, ($error) => $error);
 
   constructor() {
-    if (LOCAL_DEMO_MODE) {
+    const demoMode = isLocalDemoMode();
+    if (demoMode) {
       const savedPersona =
         typeof window !== 'undefined'
           ? window.localStorage.getItem(DEMO_PERSONA_STORAGE_KEY) || 'alex'
@@ -73,14 +74,14 @@ export class AuthService implements IAuthService {
       this._authenticated.set(true);
     }
     const settings = {
-      authority: AUTH_URL || 'http://localhost:4000',
-      client_id: AUTH_CLIENT_ID || 'shl_creator',
-      redirect_uri: AUTH_REDIRECT_URI || 'http://localhost:4000/auth',
-      silent_redirect_uri: AUTH_SILENT_REDIRECT_URI || 'http://localhost:4000/silent_redirect_callback.html',
-      post_logout_redirect_uri: AUTH_POST_LOGOUT_URI || 'http://localhost:4000',
+      authority: AUTH_URL,
+      client_id: AUTH_CLIENT_ID,
+      redirect_uri: AUTH_REDIRECT_URI,
+      silent_redirect_uri: AUTH_SILENT_REDIRECT_URI,
+      post_logout_redirect_uri: AUTH_POST_LOGOUT_URI,
       // iframeScriptOrigin: "http://localhost:3000",
       scope: "openid profile online_access",
-      automaticSilentRenew: !LOCAL_DEMO_MODE,
+      automaticSilentRenew: !demoMode,
     };
     this.userManager = new UserManager(settings);
 
@@ -160,7 +161,7 @@ export class AuthService implements IAuthService {
   }
 
   async getUser(): Promise<User | null> {
-    if (LOCAL_DEMO_MODE) {
+    if (isLocalDemoMode()) {
       return buildLocalDemoUser(this.getDemoPersona());
     }
     const user = await this.userManager.getUser();
@@ -168,7 +169,7 @@ export class AuthService implements IAuthService {
   }
 
   async getAccessToken(): Promise<string | undefined> {
-    if (LOCAL_DEMO_MODE) {
+    if (isLocalDemoMode()) {
       return 'local-demo-token';
     }
     try {
@@ -197,7 +198,7 @@ export class AuthService implements IAuthService {
   }
 
   async signinCallback(): Promise<User | undefined> {
-    if (LOCAL_DEMO_MODE) {
+    if (isLocalDemoMode()) {
       const demoUser = buildLocalDemoUser(this.getDemoPersona());
       this._user.set(demoUser);
       this._authenticated.set(true);
@@ -242,7 +243,7 @@ export class AuthService implements IAuthService {
   }
 
   async login(): Promise<void> {
-    if (LOCAL_DEMO_MODE) {
+    if (isLocalDemoMode()) {
       const demoUser = buildLocalDemoUser(this.getDemoPersona());
       this._user.set(demoUser);
       this._authenticated.set(true);
@@ -267,7 +268,7 @@ export class AuthService implements IAuthService {
   }
 
   async isAuthenticated(): Promise<boolean | undefined> {
-    if (LOCAL_DEMO_MODE) {
+    if (isLocalDemoMode()) {
       const demoUser = buildLocalDemoUser(this.getDemoPersona());
       this._user.set(demoUser);
       this._authenticated.set(true);
@@ -293,7 +294,7 @@ export class AuthService implements IAuthService {
    * there is no session or it can't be reached in time.
    */
   async restoreSession(timeoutMs: number = 4000): Promise<boolean> {
-    if (LOCAL_DEMO_MODE) {
+    if (isLocalDemoMode()) {
       const demoUser = buildLocalDemoUser(this.getDemoPersona());
       this._user.set(demoUser);
       this._authenticated.set(true);
