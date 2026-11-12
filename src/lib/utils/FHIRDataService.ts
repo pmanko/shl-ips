@@ -15,8 +15,10 @@ import { get, writable, derived, type Readable, type Writable } from "svelte/sto
 import { ResourceCollection } from "$lib/utils/ResourceCollection";
 import {
   INTERMEDIATE_FHIR_SERVER_BASE,
-  IDENTIFIER_SYSTEM
+  IDENTIFIER_SYSTEM,
+  LOCAL_DEMO_MODE
 } from "$lib/config/config";
+import { getLocalDemoPersonaFixture } from "$lib/utils/localDemoPersonas";
 import type { IAuthService, ResourceRetrieveEvent, UserDemographics } from "$lib/utils/types";
 import { ResourceHelper } from "$lib/utils/ResourceHelper";
 import type { Bundle, BundleEntry, Patient, Resource } from "fhir/r4";
@@ -112,7 +114,37 @@ export class FHIRDataService {
     return Array.from(collections());
   }
 
+  async loadLocalDemoPersona(persona?: string): Promise<void> {
+    const activePersona =
+      persona ||
+      ((this.auth as any).getDemoPersona ? (this.auth as any).getDemoPersona() : 'alex');
+    if ((this.auth as any).setDemoPersona) {
+      (this.auth as any).setDemoPersona(activePersona);
+    }
+    this.loading.set(true);
+    try {
+      const fixture = getLocalDemoPersonaFixture(activePersona);
+      this.setMasterPatient(structuredClone(fixture.masterPatient));
+      this.userResources.set({});
+      for (const colDef of fixture.collections) {
+        if (Array.isArray(colDef.resources) && colDef.resources.length > 0) {
+          const rc = new ResourceCollection(structuredClone(colDef.resources));
+          const added = this.addDatasetToUserResources(rc);
+          added.status.set({ state: StateManager.State.IDLE });
+        }
+      }
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
   async loadUserData(): Promise<void> {
+    if (LOCAL_DEMO_MODE || !INTERMEDIATE_FHIR_SERVER_BASE) {
+      if (this.getAllResourceCollections().length === 0) {
+        await this.loadLocalDemoPersona();
+      }
+      return;
+    }
     let resourceCollections = this.getAllResourceCollections();
     if (resourceCollections.length === 0) {
       this.loading.set(true);
@@ -606,6 +638,10 @@ export class FHIRDataService {
   }
 
   async deleteDataset(category: string, method: string, source: string) {
+    if (LOCAL_DEMO_MODE || !INTERMEDIATE_FHIR_SERVER_BASE) {
+      this.removeDatasetFromUserResources(category, method, source);
+      return;
+    }
     try {
       await this.deleteDatasetFromServer(category, method, source);
       this.removeDatasetFromUserResources(category, method, source);
@@ -703,6 +739,16 @@ export class FHIRDataService {
 
     // Finish pre-upload normalization (add consistent fullUrls and use them to update all references)
     const finalEntries = finalizeForUpload(renormalizedConfirmedImportEntries);
+
+    if (LOCAL_DEMO_MODE || !INTERMEDIATE_FHIR_SERVER_BASE) {
+      const localResources = finalEntries
+        .map((e: any) => e.resource)
+        .filter((r: any): r is Resource => Boolean(r && r.resourceType));
+      const rc = new ResourceCollection(localResources);
+      const added = this.addDatasetToUserResources(rc);
+      added.status.set({ state: StateManager.State.IDLE });
+      return;
+    }
 
     let newDataset;
     let status;

@@ -39,8 +39,16 @@ export class SHLClient {
   }
 
   async getUserShls(): Promise<SHLAdminParams[]> {
-    const userId = await get(this.auth.userId);
-    return getUserShls(API_BASE, await this.auth.getAccessToken(), userId);
+    if (!API_BASE) {
+      return [];
+    }
+    try {
+      const userId = await get(this.auth.userId);
+      return await getUserShls(API_BASE, await this.auth.getAccessToken(), userId);
+    } catch (e) {
+      console.warn('SHLClient.getUserShls fallback to []:', e);
+      return [];
+    }
   }
 
   async createShl(config: ConfigForServer = {}): Promise<SHLAdminParams> {

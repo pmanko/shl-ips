@@ -3,7 +3,8 @@ import {
   AUTH_CLIENT_ID,
   AUTH_REDIRECT_URI,
   AUTH_SILENT_REDIRECT_URI,
-  AUTH_POST_LOGOUT_URI
+  AUTH_POST_LOGOUT_URI,
+  LOCAL_DEMO_MODE
 } from '$lib/config/config';
 import { derived, writable, type Writable, type Readable } from 'svelte/store';
 import { type User, UserManager } from 'oidc-client-ts';
@@ -13,6 +14,37 @@ import type { IAuthService } from '$lib/utils/types';
 // Set when a failed sign-in callback has already restarted login once, so a
 // callback that keeps failing surfaces an error instead of redirecting forever.
 const CALLBACK_RETRY_KEY = 'auth:callbackRetry';
+const DEMO_PERSONA_STORAGE_KEY = 'wahs:demoPersona';
+
+function buildLocalDemoUser(persona: string = 'alex'): User {
+  const isLeo = persona === 'leo';
+  return {
+    id_token: 'local-demo-id-token',
+    session_state: 'local-demo-session',
+    access_token: 'local-demo-token',
+    token_type: 'Bearer',
+    scope: 'openid profile online_access',
+    profile: {
+      sub: `demo-user-${persona}`,
+      iss: 'http://localhost:4000',
+      aud: 'shl_creator',
+      exp: Math.floor(Date.now() / 1000) + 86400 * 30,
+      iat: Math.floor(Date.now() / 1000),
+      given_name: isLeo ? 'Leo' : 'Alex',
+      family_name: 'Johnson',
+      name: isLeo ? 'Leo Johnson (Child Proxy)' : 'Alex Johnson',
+      email: isLeo ? 'leo.proxy@example.org' : 'alex.johnson@example.org',
+      gender: 'male',
+      birthday: isLeo ? '2019-08-22' : '1962-03-14'
+    },
+    expires_at: Math.floor(Date.now() / 1000) + 86400 * 30,
+    state: undefined,
+    toStorageString: () => JSON.stringify({ persona }),
+    expires_in: 86400 * 30,
+    expired: false,
+    scopes: ['openid', 'profile', 'online_access']
+  } as unknown as User;
+}
 
 export class AuthService implements IAuthService {
   private userManager: UserManager;
@@ -31,15 +63,24 @@ export class AuthService implements IAuthService {
   public readonly error: Readable<any> = derived(this._error, ($error) => $error);
 
   constructor() {
+    if (LOCAL_DEMO_MODE) {
+      const savedPersona =
+        typeof window !== 'undefined'
+          ? window.localStorage.getItem(DEMO_PERSONA_STORAGE_KEY) || 'alex'
+          : 'alex';
+      const demoUser = buildLocalDemoUser(savedPersona);
+      this._user.set(demoUser);
+      this._authenticated.set(true);
+    }
     const settings = {
-      authority: AUTH_URL,
-      client_id: AUTH_CLIENT_ID,
-      redirect_uri: AUTH_REDIRECT_URI,
-      silent_redirect_uri: AUTH_SILENT_REDIRECT_URI,
-      post_logout_redirect_uri: AUTH_POST_LOGOUT_URI,
+      authority: AUTH_URL || 'http://localhost:4000',
+      client_id: AUTH_CLIENT_ID || 'shl_creator',
+      redirect_uri: AUTH_REDIRECT_URI || 'http://localhost:4000/auth',
+      silent_redirect_uri: AUTH_SILENT_REDIRECT_URI || 'http://localhost:4000/silent_redirect_callback.html',
+      post_logout_redirect_uri: AUTH_POST_LOGOUT_URI || 'http://localhost:4000',
       // iframeScriptOrigin: "http://localhost:3000",
       scope: "openid profile online_access",
-      automaticSilentRenew: true,
+      automaticSilentRenew: !LOCAL_DEMO_MODE,
     };
     this.userManager = new UserManager(settings);
 
@@ -101,12 +142,35 @@ export class AuthService implements IAuthService {
     await this.login();
   }
 
+  setDemoPersona(persona: string): User {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(DEMO_PERSONA_STORAGE_KEY, persona);
+    }
+    const demoUser = buildLocalDemoUser(persona);
+    this._user.set(demoUser);
+    this._authenticated.set(true);
+    return demoUser;
+  }
+
+  getDemoPersona(): string {
+    if (typeof window !== 'undefined') {
+      return window.localStorage.getItem(DEMO_PERSONA_STORAGE_KEY) || 'alex';
+    }
+    return 'alex';
+  }
+
   async getUser(): Promise<User | null> {
+    if (LOCAL_DEMO_MODE) {
+      return buildLocalDemoUser(this.getDemoPersona());
+    }
     const user = await this.userManager.getUser();
     return user;
   }
 
   async getAccessToken(): Promise<string | undefined> {
+    if (LOCAL_DEMO_MODE) {
+      return 'local-demo-token';
+    }
     try {
       const user = await this.getUser();
       if (user && !user.expired && user?.access_token) {
@@ -133,6 +197,12 @@ export class AuthService implements IAuthService {
   }
 
   async signinCallback(): Promise<User | undefined> {
+    if (LOCAL_DEMO_MODE) {
+      const demoUser = buildLocalDemoUser(this.getDemoPersona());
+      this._user.set(demoUser);
+      this._authenticated.set(true);
+      return demoUser;
+    }
     this.processingCallback = true;
     try {
       const user = await this.userManager.signinCallback();
@@ -172,6 +242,12 @@ export class AuthService implements IAuthService {
   }
 
   async login(): Promise<void> {
+    if (LOCAL_DEMO_MODE) {
+      const demoUser = buildLocalDemoUser(this.getDemoPersona());
+      this._user.set(demoUser);
+      this._authenticated.set(true);
+      return;
+    }
     // Token expiry, silent renew failure and page checks can all request a
     // login at once after an idle period; only start one redirect.
     if (this.loginInProgress) {
@@ -191,6 +267,12 @@ export class AuthService implements IAuthService {
   }
 
   async isAuthenticated(): Promise<boolean | undefined> {
+    if (LOCAL_DEMO_MODE) {
+      const demoUser = buildLocalDemoUser(this.getDemoPersona());
+      this._user.set(demoUser);
+      this._authenticated.set(true);
+      return true;
+    }
     try {
       const user = await this.userManager.getUser();
       if (user) {
@@ -211,6 +293,12 @@ export class AuthService implements IAuthService {
    * there is no session or it can't be reached in time.
    */
   async restoreSession(timeoutMs: number = 4000): Promise<boolean> {
+    if (LOCAL_DEMO_MODE) {
+      const demoUser = buildLocalDemoUser(this.getDemoPersona());
+      this._user.set(demoUser);
+      this._authenticated.set(true);
+      return true;
+    }
     try {
       const stored = await this.userManager.getUser();
       if (stored && !stored.expired) {

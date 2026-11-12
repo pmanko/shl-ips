@@ -35,5 +35,12 @@
         <small class="d-sm-none" style="font-size: 0.6rem; line-height: 1.2">Share</small>
       </NavLink>
     </NavItem>
+    <NavItem class="mx-1">
+      <NavLink href="/chat" active={activeItem === "chat"} class="d-flex flex-column flex-sm-row justify-content-center align-items-center rounded-5 text-nowrap">
+        <Icon class="d-sm-none fs-6" name="chat-dots"/>
+        <span class="d-none d-sm-inline"><Icon name="stars" class="me-1" />Ask WAHS</span>
+        <small class="d-sm-none" style="font-size: 0.6rem; line-height: 1.2">Ask WAHS</small>
+      </NavLink>
+    </NavItem>
   </Nav>
 </div>
