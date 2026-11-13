@@ -39,6 +39,16 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     });
     expect(payload.wahs.overlay_resources).toHaveLength(1);
     expect(payload.wahs.fhir_bundle).toBeUndefined();
+
+    const defaultPayload = buildEngineChatPayload(
+      {
+        model: 'wahs-12b-kb',
+        messages: [{ role: 'user', content: 'Check my medications' }]
+      },
+      false,
+      false
+    );
+    expect(defaultPayload.wahs.target_budget_tokens).toBeUndefined();
   });
 
   it('rejects unauthenticated POST without Bearer header', async () => {

@@ -33,10 +33,14 @@ export function buildEngineChatPayload(
         ? [{ role: 'user', content: 'Preview context' }]
         : [];
 
+  const rawBudget = wahsIn.target_budget_tokens ?? body?.target_budget_tokens;
+  const parsedBudget =
+    rawBudget !== undefined && rawBudget !== null && rawBudget !== '' ? Number(rawBudget) : null;
+
   const wahsOptions: Record<string, any> = {
-    target_budget_tokens: Number(
-      wahsIn.target_budget_tokens ?? body?.target_budget_tokens ?? 2800
-    ),
+    ...(parsedBudget !== null && Number.isFinite(parsedBudget) && parsedBudget > 0
+      ? { target_budget_tokens: Math.trunc(parsedBudget) }
+      : {}),
     sharing_posture: String(
       wahsIn.sharing_posture ?? body?.sharing_posture ?? 'patient_self'
     ),

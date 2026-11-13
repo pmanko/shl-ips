@@ -84,7 +84,7 @@
   let selectedModel = 'wahs-12b-kb';
   let activePersona = 'alex';
   let sharingPosture: 'patient_self' | 'external_share' = 'patient_self';
-  let targetBudgetTokens = 2800;
+  let targetBudgetTokens: number | null = null;
   let excludedSources: Record<string, boolean> = {};
 
   let inputPrompt = '';
@@ -307,7 +307,7 @@
         body: JSON.stringify({
           model: selectedModel,
           wahs: {
-            target_budget_tokens: targetBudgetTokens,
+            ...(targetBudgetTokens != null ? { target_budget_tokens: targetBudgetTokens } : {}),
             sharing_posture: sharingPosture,
             chart_scope: buildChartScopePayload(),
             ...(fhirBundle ? { fhir_bundle: fhirBundle } : {})
@@ -404,7 +404,7 @@
           temperature: 0.1,
           max_tokens: 1024,
           wahs: {
-            target_budget_tokens: targetBudgetTokens,
+            ...(targetBudgetTokens != null ? { target_budget_tokens: targetBudgetTokens } : {}),
             sharing_posture: sharingPosture,
             chart_scope: buildChartScopePayload(),
             ...(fhirBundle ? { fhir_bundle: fhirBundle } : {})
@@ -777,7 +777,7 @@
           <strong>Condensation:</strong> Tier {latestXWahs.condensation.tier} ({latestXWahs.condensation.tier_name})
         </span>
         <span>
-          <strong>Tokens:</strong> {latestXWahs.condensation.actual_tokens} / {latestXWahs.condensation.budget_tokens ?? latestXWahs.condensation.target_tokens}
+          <strong>Tokens:</strong> {latestXWahs.condensation.actual_tokens} / {latestXWahs.condensation.budget_effective ?? latestXWahs.condensation.budget_tokens ?? latestXWahs.condensation.target_tokens}
         </span>
         <span>
           <strong>Omitted Items:</strong> {latestXWahs.condensation.omitted_clinical_items ?? 0}
