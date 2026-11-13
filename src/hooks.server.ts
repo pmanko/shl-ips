@@ -5,7 +5,7 @@
  */
 
 import { error, type Handle } from '@sveltejs/kit';
-import { SERVER_API_BASE } from '$lib/server/config';
+import { SERVER_API_BASE, SERVER_LOCAL_DEMO_MODE } from '$lib/server/config';
 import { INSTANCE_CONFIG } from '$lib/config/instance_config';
 
 const disallowedEndpoints = INSTANCE_CONFIG.disallowedEndpoints;
@@ -23,6 +23,9 @@ async function checkAuth(request: Request) {
   if (!auth || !auth.startsWith('Bearer ')) {
     console.log('Unauthorized');
     throw error(401, { message: 'Unauthorized' });
+  }
+  if (SERVER_LOCAL_DEMO_MODE && (!SERVER_API_BASE || auth === 'Bearer local-demo-token')) {
+    return new Response(null, { status: 200 });
   }
   return await fetch(`${SERVER_API_BASE}/authcheck`, {
     method: 'POST',
@@ -76,13 +79,19 @@ export const handle: Handle = async ({ event, resolve }) => {
     // Cookie-based auth for page loads — attach token to locals for use in load functions
     const token = event.cookies.get('auth_token');
     if (token) {
-      const valid = await checkCookieAuth(token);
-      if (valid) {
+      if (SERVER_LOCAL_DEMO_MODE && (!SERVER_API_BASE || token === 'local-demo-token')) {
         event.locals.token = token;
       } else {
-        // Token present but invalid — clear the stale cookie
-        event.cookies.delete('auth_token', { path: '/' });
+        const valid = await checkCookieAuth(token);
+        if (valid) {
+          event.locals.token = token;
+        } else {
+          // Token present but invalid — clear the stale cookie
+          event.cookies.delete('auth_token', { path: '/' });
+        }
       }
+    } else if (SERVER_LOCAL_DEMO_MODE && !SERVER_API_BASE) {
+      event.locals.token = 'local-demo-token';
     }
   }
 

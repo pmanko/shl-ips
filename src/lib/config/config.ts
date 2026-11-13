@@ -403,3 +403,11 @@ export const EXAMPLE_IPS = {
   'Lilly Curic': 'https://fhir.myhealthsummary.demo.cirg.uw.edu/fhir/Bundle/03dee25e-7ce8-4677-be1d-0053c6e7da1b',
 };
 export const IPS_DEFAULT = 'Maria SEATTLE Gravitate';
+
+// Local demo mode fallback when no external Keycloak IdP is configured.
+// Note: WAHS_ENGINE_URL is strictly server-side (`$lib/server/config`); the browser calls `/api/chat`.
+export const LOCAL_DEMO_MODE = Boolean(
+  env('VITE_LOCAL_DEMO') === '1' ||
+  env('VITE_LOCAL_DEMO') === 'true' ||
+  !AUTH_URL
+);

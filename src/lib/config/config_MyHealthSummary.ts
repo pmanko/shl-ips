@@ -131,6 +131,7 @@ export default {
     },
     manage: {},
     summaries: {},
+    chat: {},
     share: {
       component: AddSummary
     }
