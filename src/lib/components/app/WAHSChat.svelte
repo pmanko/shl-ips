@@ -25,6 +25,14 @@
     isPatientCollection
   } from '$lib/utils/resourceCollectionUtils';
   import { download } from '$lib/utils/util';
+  import {
+    buildPartitionKey,
+    buildPrivacyScopeSignature,
+    filterMessagesForScope,
+    getScopedHistoryStorageKey,
+    resolveChatSessionKey,
+    type SharingPosture
+  } from '$lib/utils/wahsChatSession';
 
   let fhirDataService: FHIRDataService = getContext('fhirDataService');
   let authService: IAuthService = getContext('authService');
@@ -60,6 +68,7 @@
     privacyNotices?: string[];
     completenessManifest?: string;
     prefixHash?: string;
+    scopeSignature?: string;
   }
 
   interface SourceSummary {
@@ -83,7 +92,7 @@
 
   let selectedModel = 'wahs-12b-kb';
   let activePersona = 'alex';
-  let sharingPosture: 'patient_self' | 'external_share' = 'patient_self';
+  let sharingPosture: SharingPosture = 'patient_self';
   let targetBudgetTokens: number | null = null;
   let excludedSources: Record<string, boolean> = {};
 
@@ -91,6 +100,10 @@
   let isStreaming = false;
   let errorBanner = '';
   let showTelemetry = true;
+
+  let componentMounted = false;
+  let loadedPartitionKey: string | null = null;
+  let lastAutoPreviewPartitionKey: string | null = null;
 
   let messages: ChatTurn[] = [];
   let latestXWahs: any = null;
@@ -157,37 +170,86 @@
     ($masterPatient?.resource as Patient | undefined)?.birthDate ||
     (activePersona === 'leo' ? '2019-08-22' : '1962-03-14');
 
-  function getHistoryStorageKey(keyId: string): string {
-    return `wahs:sveltekit:chatHistory:v3:${keyId}`;
+  $: resolvedSessionKey = resolveChatSessionKey({
+    demoMode: DEMO_MODE,
+    activePersona,
+    masterPatientId: $masterPatient?.resource?.id
+  });
+
+  $: isSessionReady = resolvedSessionKey !== null && !$loadingData;
+
+  $: activeScopeSignature = buildPrivacyScopeSignature({
+    sharingPosture,
+    includedSources: activeIncludedSources,
+    excludedSources
+  });
+
+  function getCurrentIncludedSourceNames(excluded: Record<string, boolean> = excludedSources): string[] {
+    const cols = fhirDataService ? fhirDataService.getAllResourceCollections() : [];
+    const names: string[] = [];
+    for (const col of cols) {
+      const tags = col.getTags();
+      const sourceName = tags.sourceName || tags.source;
+      if (sourceName && !excluded[sourceName]) {
+        names.push(sourceName);
+      }
+    }
+    return names;
   }
 
-  function currentSessionKey(): string {
-    return DEMO_MODE ? activePersona : ($masterPatient?.resource?.id || 'authenticated');
+  function closeProvenanceDrawer() {
+    provenanceOpen = false;
+    selectedCitationKey = '';
+    selectedCitationMeta = null;
+    selectedCitationFhirJson = '';
   }
 
-  function loadSavedHistory(keyId: string) {
+  function syncActiveConversationPartition(
+    sessionKey: string,
+    scopeSignature: string,
+    force = false
+  ) {
+    const nextPartitionKey = buildPartitionKey(sessionKey, scopeSignature);
+    if (!force && loadedPartitionKey === nextPartitionKey) {
+      return;
+    }
+    loadedPartitionKey = nextPartitionKey;
+    closeProvenanceDrawer();
     if (typeof window === 'undefined') return;
     try {
-      const raw = window.localStorage.getItem(getHistoryStorageKey(keyId));
+      const raw = window.localStorage.getItem(
+        getScopedHistoryStorageKey(sessionKey, scopeSignature)
+      );
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          messages = parsed;
-          const lastAssistant = [...messages]
-            .reverse()
-            .find((m) => m.role === 'assistant' && m.condensation);
-          if (lastAssistant) {
-            latestXWahs = {
-              citation_map: lastAssistant.citationMap,
-              condensation: lastAssistant.condensation,
-              scope_applied: lastAssistant.scopeApplied,
-              ai_provenance: lastAssistant.aiProvenance,
-              privacy_notices: lastAssistant.privacyNotices,
-              completeness_manifest: lastAssistant.completenessManifest
-            };
-            latestPrefixHash = lastAssistant.prefixHash || '';
+          const scopedTurns: ChatTurn[] = parsed
+            .filter((m) => m && (!m.scopeSignature || m.scopeSignature === scopeSignature))
+            .map((m) => ({
+              ...m,
+              scopeSignature: m.scopeSignature ?? scopeSignature
+            }));
+          if (scopedTurns.length > 0) {
+            messages = scopedTurns;
+            const lastAssistant = [...scopedTurns]
+              .reverse()
+              .find((m) => m.role === 'assistant' && m.condensation);
+            if (lastAssistant) {
+              latestXWahs = {
+                citation_map: lastAssistant.citationMap,
+                condensation: lastAssistant.condensation,
+                scope_applied: lastAssistant.scopeApplied,
+                ai_provenance: lastAssistant.aiProvenance,
+                privacy_notices: lastAssistant.privacyNotices,
+                completeness_manifest: lastAssistant.completenessManifest
+              };
+              latestPrefixHash = lastAssistant.prefixHash || '';
+            } else {
+              latestXWahs = null;
+              latestPrefixHash = '';
+            }
+            return;
           }
-          return;
         }
       }
     } catch (e) {
@@ -195,17 +257,30 @@
     }
     messages = [];
     latestXWahs = null;
+    latestPrefixHash = '';
   }
 
-  function saveHistory() {
+  function saveHistoryForPartition(sessionKey: string, scopeSignature: string, turns: ChatTurn[]) {
     if (typeof window === 'undefined') return;
     try {
+      const scopedTurns = turns.filter((t) => t.scopeSignature === scopeSignature);
       window.localStorage.setItem(
-        getHistoryStorageKey(currentSessionKey()),
-        JSON.stringify(messages)
+        getScopedHistoryStorageKey(sessionKey, scopeSignature),
+        JSON.stringify(scopedTurns)
       );
     } catch (e) {
       console.warn('Failed to persist chat history:', e);
+    }
+  }
+
+  $: if (componentMounted && !isStreaming && isSessionReady && resolvedSessionKey) {
+    const targetPartitionKey = buildPartitionKey(resolvedSessionKey, activeScopeSignature);
+    if (loadedPartitionKey !== targetPartitionKey) {
+      syncActiveConversationPartition(resolvedSessionKey, activeScopeSignature);
+    }
+    if (lastAutoPreviewPartitionKey !== targetPartitionKey) {
+      lastAutoPreviewPartitionKey = targetPartitionKey;
+      void refreshContextPreview();
     }
   }
 
@@ -328,6 +403,7 @@
   }
 
   async function toggleSourceScope(sourceName: string) {
+    if (isStreaming) return;
     const next = { ...excludedSources };
     if (next[sourceName]) {
       delete next[sourceName];
@@ -337,6 +413,35 @@
       next[sourceName] = true;
     }
     excludedSources = next;
+    errorBanner = '';
+    const nextScope = buildPrivacyScopeSignature({
+      sharingPosture,
+      includedSources: getCurrentIncludedSourceNames(next),
+      excludedSources: next
+    });
+    if (resolvedSessionKey) {
+      lastAutoPreviewPartitionKey = buildPartitionKey(resolvedSessionKey, nextScope);
+      syncActiveConversationPartition(resolvedSessionKey, nextScope);
+    }
+    await refreshContextPreview();
+  }
+
+  async function handleSharingPostureChange(event?: Event) {
+    if (isStreaming) return;
+    const rawValue = (event?.target as HTMLSelectElement | null)?.value ?? sharingPosture;
+    const nextPosture: SharingPosture =
+      rawValue === 'external_share' ? 'external_share' : 'patient_self';
+    sharingPosture = nextPosture;
+    errorBanner = '';
+    const nextScope = buildPrivacyScopeSignature({
+      sharingPosture: nextPosture,
+      includedSources: getCurrentIncludedSourceNames(excludedSources),
+      excludedSources
+    });
+    if (resolvedSessionKey) {
+      lastAutoPreviewPartitionKey = buildPartitionKey(resolvedSessionKey, nextScope);
+      syncActiveConversationPartition(resolvedSessionKey, nextScope);
+    }
     await refreshContextPreview();
   }
 
@@ -348,7 +453,13 @@
     if ((fhirDataService as any).loadLocalDemoPersona) {
       await (fhirDataService as any).loadLocalDemoPersona(persona);
     }
-    loadSavedHistory(persona);
+    const nextScope = buildPrivacyScopeSignature({
+      sharingPosture,
+      includedSources: getCurrentIncludedSourceNames({}),
+      excludedSources: {}
+    });
+    lastAutoPreviewPartitionKey = buildPartitionKey(persona, nextScope);
+    syncActiveConversationPartition(persona, nextScope, true);
     await refreshContextPreview();
   }
 
@@ -361,7 +472,13 @@
 
   async function sendQuestion(promptText?: string) {
     const question = (promptText ?? inputPrompt).trim();
-    if (!question || isStreaming) return;
+    if (!question || isStreaming || !isSessionReady || !resolvedSessionKey) return;
+
+    const requestSessionKey = resolvedSessionKey;
+    const requestScopeSignature = activeScopeSignature;
+    const requestSharingPosture = sharingPosture;
+    const requestChartScope = buildChartScopePayload();
+    const requestPartitionKey = buildPartitionKey(requestSessionKey, requestScopeSignature);
 
     errorBanner = '';
     inputPrompt = '';
@@ -370,7 +487,8 @@
       id: `user-${Date.now()}`,
       role: 'user',
       content: question,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      scopeSignature: requestScopeSignature
     };
 
     const assistantTurn: ChatTurn = {
@@ -378,10 +496,12 @@
       role: 'assistant',
       content: '',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      model: selectedModel
+      model: selectedModel,
+      scopeSignature: requestScopeSignature
     };
 
-    messages = [...messages, userTurn, assistantTurn];
+    const baseMessages = messages.filter((m) => m.scopeSignature === requestScopeSignature);
+    messages = [...baseMessages, userTurn, assistantTurn];
     isStreaming = true;
     await scrollToBottom();
 
@@ -389,10 +509,10 @@
     try {
       const headers = await buildAuthHeaders();
       const fhirBundle = assembleLocalDemoBundleIfNeeded();
-      const historyPayload = messages
-        .slice(0, -1)
-        .filter((m) => m.content.trim().length > 0)
-        .map((m) => ({ role: m.role, content: m.content }));
+      const historyPayload = filterMessagesForScope(
+        messages.slice(0, -1),
+        requestScopeSignature
+      );
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -405,8 +525,8 @@
           max_tokens: 1024,
           wahs: {
             ...(targetBudgetTokens != null ? { target_budget_tokens: targetBudgetTokens } : {}),
-            sharing_posture: sharingPosture,
-            chart_scope: buildChartScopePayload(),
+            sharing_posture: requestSharingPosture,
+            chart_scope: requestChartScope,
             ...(fhirBundle ? { fhir_bundle: fhirBundle } : {})
           }
         })
@@ -458,8 +578,10 @@
             const delta = parsed.choices?.[0]?.delta?.content;
             if (delta) {
               assistantTurn.content += delta;
-              messages = [...messages.slice(0, -1), { ...assistantTurn }];
-              await scrollToBottom();
+              if (loadedPartitionKey === requestPartitionKey) {
+                messages = [...messages.slice(0, -1), { ...assistantTurn }];
+                await scrollToBottom();
+              }
             }
           } catch {
             // ignore partial SSE JSON fragment
@@ -468,11 +590,16 @@
       }
 
       assistantTurn.latencyMs = Math.round(performance.now() - t0);
-      messages = [...messages.slice(0, -1), { ...assistantTurn }];
-      saveHistory();
+      const finalMessages = [...baseMessages, userTurn, { ...assistantTurn }];
+      if (loadedPartitionKey === requestPartitionKey) {
+        messages = finalMessages;
+      }
+      saveHistoryForPartition(requestSessionKey, requestScopeSignature, finalMessages);
     } catch (err: any) {
       errorBanner = err?.message || 'Unable to reach WAHS Engine via /api/chat.';
-      messages = messages.slice(0, -1);
+      if (loadedPartitionKey === requestPartitionKey) {
+        messages = messages.slice(0, -1);
+      }
     } finally {
       isStreaming = false;
       await scrollToBottom();
@@ -481,8 +608,12 @@
 
   function clearHistory() {
     messages = [];
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(getHistoryStorageKey(currentSessionKey()));
+    latestXWahs = null;
+    latestPrefixHash = '';
+    if (typeof window !== 'undefined' && resolvedSessionKey) {
+      window.localStorage.removeItem(
+        getScopedHistoryStorageKey(resolvedSessionKey, activeScopeSignature)
+      );
     }
   }
 
@@ -492,6 +623,7 @@
       `# WA Health Summary — Ask WAHS Conversation Export`,
       `- **Patient Profile:** ${patientDisplayName} (DOB: ${patientBirthDate})`,
       `- **Exported:** ${new Date().toISOString()}`,
+      `- **Sharing Posture:** ${sharingPosture}`,
       `- **Scoped Sources:** ${activeIncludedSources.join(', ')}`,
       ''
     ];
@@ -503,7 +635,7 @@
       lines.push('');
     }
     download(
-      `wahs-chat-${currentSessionKey()}-${new Date().toISOString().slice(0, 10)}.md`,
+      `wahs-chat-${resolvedSessionKey || 'session'}-${new Date().toISOString().slice(0, 10)}.md`,
       lines.join('\n')
     );
   }
@@ -583,9 +715,8 @@
     if (DEMO_MODE && (authService as any).getDemoPersona) {
       activePersona = (authService as any).getDemoPersona();
     }
-    loadSavedHistory(currentSessionKey());
     await loadEngineModels();
-    await refreshContextPreview();
+    componentMounted = true;
   });
 </script>
 
@@ -721,7 +852,8 @@
           type="select"
           bsSize="sm"
           bind:value={sharingPosture}
-          on:change={() => refreshContextPreview()}
+          disabled={isStreaming || !isSessionReady}
+          on:change={handleSharingPostureChange}
           style="width: auto; font-size: 0.78rem;"
           aria-label="Privacy sharing posture"
           title="Privacy redaction posture"
@@ -734,6 +866,7 @@
           type="select"
           bsSize="sm"
           bind:value={selectedModel}
+          disabled={isStreaming}
           style="width: auto; max-width: 230px; font-size: 0.78rem;"
           aria-label="Select clinical LLM"
         >
@@ -842,6 +975,7 @@
               type="button"
               class="btn btn-outline-primary btn-sm text-start rounded-3 px-3 py-2"
               style="font-size: 0.82rem; max-width: 320px;"
+              disabled={isStreaming || !isSessionReady}
               on:click={() => sendQuestion(prompt)}
             >
               <Icon name="arrow-up-right-circle" class="me-1" />{prompt}
@@ -924,16 +1058,18 @@
     >
       <Input
         type="text"
-        placeholder={`Ask a question about ${patientDisplayName}'s health record...`}
+        placeholder={!isSessionReady
+          ? 'Loading your health summary...'
+          : `Ask a question about ${patientDisplayName}'s health record...`}
         bind:value={inputPrompt}
-        disabled={isStreaming}
+        disabled={isStreaming || !isSessionReady}
         class="rounded-pill px-3"
       />
       <Button
         type="submit"
         color="primary"
         class="rounded-pill px-4 d-flex align-items-center gap-1 text-nowrap"
-        disabled={isStreaming || !inputPrompt.trim()}
+        disabled={isStreaming || !isSessionReady || !inputPrompt.trim()}
       >
         {#if isStreaming}
           <Spinner size="sm" />
