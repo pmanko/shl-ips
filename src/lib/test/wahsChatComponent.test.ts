@@ -251,6 +251,7 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
 
     await waitFor(() => {
       expect(screen.getByText(/Sensitive MultiCare counseling note/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /MultiCare Behavioral Health/ })).not.toBeDisabled();
     });
     expect(chatRequests).toHaveLength(1);
     expect(chatRequests[0].messages).toEqual([
@@ -258,8 +259,7 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
     ]);
 
     // Exclude MultiCare Behavioral Health: prior Turn 1 must disappear and not be sent on Turn 2
-    const multicarePill = screen.getByRole('button', { name: /MultiCare Behavioral Health/ });
-    await fireEvent.click(multicarePill);
+    await fireEvent.click(screen.getByRole('button', { name: /MultiCare Behavioral Health/ }));
 
     await waitFor(() => {
       expect(screen.queryByText(/Sensitive MultiCare counseling note/)).not.toBeInTheDocument();
@@ -272,6 +272,7 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
 
     await waitFor(() => {
       expect(screen.getByText(/UW Medicine blood pressure is stable\./)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /MultiCare Behavioral Health/ })).not.toBeDisabled();
     });
     expect(chatRequests).toHaveLength(2);
     expect(chatRequests[1].wahs.chart_scope).toEqual({
@@ -282,9 +283,10 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
     ]);
 
     // Re-including MultiCare restores the original patient_self all-sources partition
-    await fireEvent.click(multicarePill);
+    await fireEvent.click(screen.getByRole('button', { name: /MultiCare Behavioral Health/ }));
     await waitFor(() => {
       expect(screen.getByText(/Sensitive MultiCare counseling note/)).toBeInTheDocument();
+      expect(screen.getByLabelText('Privacy sharing posture')).not.toBeDisabled();
     });
 
     // Switching posture to external_share resets view to a clean partition and sends zero prior turns
@@ -300,6 +302,7 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
 
     await waitFor(() => {
       expect(screen.getByText(/External share summary with SDOH redacted\./)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Send/i })).toBeInTheDocument();
     });
     expect(chatRequests).toHaveLength(3);
     expect(chatRequests[2].wahs.sharing_posture).toBe('external_share');
@@ -411,6 +414,9 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
       expect(
         screen.getByText('Follow-up response anchored on restored thread.')
       ).toBeInTheDocument();
+      const storedAfter = JSON.parse(window.localStorage.getItem(expectedStorageKey) || '[]');
+      expect(storedAfter).toHaveLength(4);
+      expect(storedAfter[3].content).toBe('Follow-up response anchored on restored thread.');
     });
     expect(chatRequests).toHaveLength(1);
     expect(chatRequests[0].messages).toEqual([
@@ -419,9 +425,6 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
       { role: 'user', content: 'Follow-up after reload' }
     ]);
 
-    const storedAfter = JSON.parse(window.localStorage.getItem(expectedStorageKey) || '[]');
-    expect(storedAfter).toHaveLength(4);
-    expect(storedAfter[3].content).toBe('Follow-up response anchored on restored thread.');
     expect(buildPartitionKey('master-patient-99', scopeSig)).toContain('master-patient-99');
   });
 });
