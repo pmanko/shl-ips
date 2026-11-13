@@ -126,7 +126,12 @@ export const POST: RequestHandler = async ({ request, url, fetch }) => {
   }
 
   const isPreview = url.searchParams.get('mode') === 'preview' || body?.mode === 'preview';
-  const payload = buildEngineChatPayload(body, SERVER_LOCAL_DEMO_MODE, isPreview);
+  const isLocalDemoToken = authHeader === 'Bearer local-demo-token';
+  const payload = buildEngineChatPayload(
+    body,
+    SERVER_LOCAL_DEMO_MODE && isLocalDemoToken,
+    isPreview
+  );
 
   if (!isPreview && (!Array.isArray(payload.messages) || payload.messages.length === 0)) {
     return json({ error: 'messages array must not be empty' }, { status: 400 });

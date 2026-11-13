@@ -49,6 +49,58 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
       false
     );
     expect(defaultPayload.wahs.target_budget_tokens).toBeUndefined();
+
+    for (const invalidBudget of [0, -50, Number.NaN, null, '']) {
+      const invalidPayload = buildEngineChatPayload(
+        {
+          model: 'wahs-12b-kb',
+          messages: [{ role: 'user', content: 'Check invalid budget' }],
+          wahs: { target_budget_tokens: invalidBudget }
+        },
+        false,
+        false
+      );
+      expect(invalidPayload.wahs.target_budget_tokens).toBeUndefined();
+    }
+  });
+
+  it('forwards POST /api/chat?mode=preview to /v1/wahs/context/preview without target_budget_tokens and strips fhir_bundle', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          prefix_cache_key_hash: 'preview-hash-001',
+          x_wahs: { condensation: { budget_effective: 16384 } }
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+    const req = new Request('http://localhost:4000/api/chat?mode=preview', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLXByZXYifQ.sig'
+      },
+      body: JSON.stringify({
+        model: 'wahs-12b-kb',
+        wahs: {
+          chart_scope: {},
+          fhir_bundle: { resourceType: 'Bundle', entry: [] }
+        }
+      })
+    });
+    const res = await POST({
+      request: req,
+      url: new URL('http://localhost:4000/api/chat?mode=preview'),
+      fetch: mockFetch
+    } as any);
+    expect(res.status).toBe(200);
+    const [calledUrl, calledInit] = mockFetch.mock.calls[0];
+    expect(calledUrl).toMatch(/\/v1\/wahs\/context\/preview$/);
+    const forwarded = JSON.parse(calledInit.body);
+    expect(forwarded.stream).toBe(false);
+    expect(forwarded.messages).toEqual([{ role: 'user', content: 'Preview context' }]);
+    expect(forwarded.wahs.target_budget_tokens).toBeUndefined();
+    expect(forwarded.wahs.fhir_bundle).toBeUndefined();
   });
 
   it('rejects unauthenticated POST without Bearer header', async () => {
