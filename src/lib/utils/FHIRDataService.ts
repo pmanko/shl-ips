@@ -28,6 +28,30 @@ import { prepareImportedResources, entriesToResources, reconcileResourcesWithOri
 import type { DatasetDiff, NormalizedBundleEntry, NormalizedIdEntry } from "$lib/utils/importNormalization";
 import { extractResourcesFromQuestionnaireResponse } from "./sdcClient";
 
+export function rewriteFhirPaginationUrl(nextUrl: string, base: string): string {
+  const cleanBase = String(base || '').replace(/\/+$/, '');
+  const str = String(nextUrl || '').trim();
+  if (!str) return '';
+  try {
+    const parsed = new URL(str, 'http://localhost');
+    const idx = parsed.pathname.indexOf('/fhir');
+    if (
+      idx >= 0 &&
+      (parsed.pathname.length === idx + '/fhir'.length ||
+        parsed.pathname[idx + '/fhir'.length] === '/')
+    ) {
+      const rel = parsed.pathname.slice(idx + '/fhir'.length);
+      const target =
+        !rel || rel === '/' ? `${cleanBase}/` : `${cleanBase}/${rel.replace(/^\/+/, '')}`;
+      return `${target}${parsed.search}`;
+    }
+  } catch (_) {}
+  if (/^https?:\/\//i.test(str)) return str;
+  const cleanRel = str.replace(/^\/+/, '');
+  if (cleanRel.startsWith('?')) return `${cleanBase}/${cleanRel}`;
+  return `${cleanBase}/${cleanRel}`;
+}
+
 export interface PreparedImport {
   dataset: ResourceRetrieveEvent;
   entries: NormalizedIdEntry[];
@@ -285,20 +309,44 @@ export class FHIRDataService {
   }
 
   async fetchDatasetFromPatientReference(patientReference: string): Promise<ResourceCollection> {
-    return fetch(`${INTERMEDIATE_FHIR_SERVER_BASE}/${patientReference}/$everything?_count=1000`, {
-      cache: "no-store",
-      headers: {
-        "Authorization": `Bearer ${await this.auth.getAccessToken()}`
+    const base = INTERMEDIATE_FHIR_SERVER_BASE.replace(/\/+$/, '');
+    const cleanRef = String(patientReference || '').replace(/^\/+/, '');
+    let nextUrl: string | null = `${base}/${cleanRef}/$everything?_count=1000`;
+    const allResources: Resource[] = [];
+    const seenKeys = new Set<string>();
+    const masterPatientId = get(this.masterPatient)?.resource?.id;
+    const accessToken = await this.auth.getAccessToken();
+
+    for (let page = 0; page < 20 && nextUrl; page += 1) {
+      const response = await fetch(nextUrl, {
+        cache: "no-store",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`
+        }
+      });
+      if (response.ok === false) {
+        throw new Error(`Failed to fetch ${cleanRef} ($everything page ${page + 1}): ${response.status} ${response.statusText || ''}`.trim());
       }
-    })
-    .then((response) => response.text())
-    .then((data) => JSON.parse(data))
-    .then((data) => {
-      if (data?.entry?.length > 0) {
-        return data.entry.map((entry) => entry.resource).filter((resource) => !(resource.resourceType === 'Patient' && resource.id === get(this.masterPatient).resource.id));
+      const rawText = await response.text();
+      const data: Bundle = JSON.parse(rawText);
+      for (const entry of data?.entry ?? []) {
+        const resource = entry?.resource;
+        if (!resource) continue;
+        if (masterPatientId && resource.resourceType === 'Patient' && resource.id === masterPatientId) {
+          continue;
+        }
+        const key = resource.resourceType && resource.id ? `${resource.resourceType}/${resource.id}` : null;
+        if (key && seenKeys.has(key)) continue;
+        if (key) seenKeys.add(key);
+        allResources.push(resource);
       }
-    })
-    .then((data) => new ResourceCollection(data));
+      const nextLink = Array.isArray(data?.link)
+        ? data.link.find((l) => l && l.relation === 'next' && l.url)
+        : undefined;
+      nextUrl = nextLink?.url ? rewriteFhirPaginationUrl(nextLink.url, base) : null;
+    }
+
+    return new ResourceCollection(allResources.length > 0 ? allResources : undefined);
   }
 
   async fetchAuthUserPatient(): Promise<ResourceHelper | undefined> {

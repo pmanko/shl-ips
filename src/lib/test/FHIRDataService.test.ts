@@ -4,7 +4,8 @@ import { fakeAuth } from '$lib/test/mocks';
 import {
   FHIRDataService,
   FHIRServiceError,
-  MasterPatientWriteUncertainError
+  MasterPatientWriteUncertainError,
+  rewriteFhirPaginationUrl
 } from '$lib/utils/FHIRDataService';
 import { StateManager } from '$lib/utils/StateManager';
 import { ResourceCollection } from '$lib/utils/ResourceCollection';
@@ -441,6 +442,53 @@ describe('FHIRDataService', () => {
       const collection = await service.fetchDatasetFromPatientReference('Patient/ds-1');
 
       expect(collection.getFHIRResources()).toEqual([]);
+    });
+
+    it('follows multi-page $everything next links and rewrites HAPI /fhir?_getpages to /fhir/?_getpages', async () => {
+      expect(
+        rewriteFhirPaginationUrl(
+          'http://localhost/fhir?_getpages=abc&_getpagesoffset=1000&_count=1000',
+          'http://localhost:8091/fhir'
+        )
+      ).toBe('http://localhost:8091/fhir/?_getpages=abc&_getpagesoffset=1000&_count=1000');
+
+      const service = new FHIRDataService(fakeAuth());
+      service.setMasterPatient(taggedPatient({ id: 'master-1' }));
+      const dsPatient = datasetPatient('ds-1', 'labs', 'upload', 'src-1', 'Src One');
+      const obs1 = { resourceType: 'Observation', id: 'obs-1' };
+      const obs2 = { resourceType: 'Observation', id: 'obs-2' };
+
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse({
+            resourceType: 'Bundle',
+            link: [
+              {
+                relation: 'next',
+                url: 'http://localhost/fhir?_getpages=page-tok-1&_getpagesoffset=1000&_count=1000'
+              }
+            ],
+            entry: [{ resource: dsPatient }, { resource: obs1 }]
+          })
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            resourceType: 'Bundle',
+            entry: [
+              { resource: obs1 }, // duplicate across page boundary should be deduplicated
+              { resource: obs2 },
+              { resource: taggedPatient({ id: 'master-1' }) }
+            ]
+          })
+        );
+
+      const collection = await service.fetchDatasetFromPatientReference('Patient/ds-1');
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[1][0]).toBe(
+        `${BASE}/?_getpages=page-tok-1&_getpagesoffset=1000&_count=1000`
+      );
+      expect(collection.getFHIRResources()).toEqual([dsPatient, obs1, obs2]);
     });
   });
 
