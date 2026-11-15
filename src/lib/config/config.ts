@@ -4,7 +4,8 @@ import { CATEGORIES, METHODS } from '$lib/config/tags';
 
 const env = (key: string, fallback: any = import.meta.env[key]) => {
   if (typeof window === 'undefined') {
-    return fallback;
+    const serverVal = typeof process !== 'undefined' ? process.env?.[key] : undefined;
+    return serverVal ?? fallback;
   }
   return window.__env?.[key] ?? fallback;
 }

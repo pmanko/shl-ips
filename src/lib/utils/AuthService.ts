@@ -80,7 +80,7 @@ export class AuthService implements IAuthService {
       silent_redirect_uri: AUTH_SILENT_REDIRECT_URI,
       post_logout_redirect_uri: AUTH_POST_LOGOUT_URI,
       // iframeScriptOrigin: "http://localhost:3000",
-      scope: "openid profile online_access",
+      scope: "openid profile email online_access",
       automaticSilentRenew: !demoMode,
     };
     this.userManager = new UserManager(settings);
@@ -360,6 +360,9 @@ export class AuthService implements IAuthService {
   }
 
   async logout(): Promise<void> {
+    if (typeof window !== 'undefined') {
+      await fetch('/auth/settoken', { method: 'DELETE' }).catch(() => {});
+    }
     await this.userManager.signoutRedirect();
   }
 }

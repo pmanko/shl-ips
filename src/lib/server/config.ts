@@ -4,7 +4,7 @@ export const API_BASE = process.env.VITE_API_BASE;
 
 export const REDIRECT_URI = process.env.REDIRECT_URI;
 
-export const SERVER_API_BASE = process.env.VITE_API_BASE;
+export const SERVER_API_BASE = process.env.SERVER_API_BASE || process.env.VITE_API_BASE;
 
 export const WAHS_ENGINE_URL =
   process.env.WAHS_ENGINE_URL ||
@@ -12,9 +12,10 @@ export const WAHS_ENGINE_URL =
   'http://wahs-engine:8080/v1';
 
 export const SERVER_LOCAL_DEMO_MODE = Boolean(
-  process.env.VITE_LOCAL_DEMO === '1' ||
-  process.env.VITE_LOCAL_DEMO === 'true' ||
-  !process.env.VITE_API_BASE
+  process.env.SERVER_LOCAL_DEMO_MODE === '1' ||
+  process.env.SERVER_LOCAL_DEMO_MODE === 'true' ||
+  (process.env.SERVER_LOCAL_DEMO_MODE !== 'false' &&
+    (process.env.VITE_LOCAL_DEMO === '1' || process.env.VITE_LOCAL_DEMO === 'true'))
 );
 
 export const CONFIDENTIAL_HOSTS: Record<string, any> = {

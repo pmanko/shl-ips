@@ -248,8 +248,10 @@
                     </Row>
                   </DropdownItem>
                 {/if}
-                <DropdownItem divider />
-                <DropdownItem header>Build: {VERSION_STRING.split('-g')[0]}</DropdownItem>
+                {#if VERSION_STRING}
+                  <DropdownItem divider />
+                  <DropdownItem header>Build: {VERSION_STRING.split('-g')[0]}</DropdownItem>
+                {/if}
               </DropdownMenu>
           </Dropdown>
         {:else}
