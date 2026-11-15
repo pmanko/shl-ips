@@ -455,8 +455,8 @@ describe('FHIRDataService', () => {
       const service = new FHIRDataService(fakeAuth());
       service.setMasterPatient(taggedPatient({ id: 'master-1' }));
       const dsPatient = datasetPatient('ds-1', 'labs', 'upload', 'src-1', 'Src One');
-      const obs1 = { resourceType: 'Observation', id: 'obs-1' };
-      const obs2 = { resourceType: 'Observation', id: 'obs-2' };
+      const obs1 = { resourceType: 'Observation', id: 'obs-1', valueString: 'page-1-value' };
+      const obs2 = { resourceType: 'Observation', id: 'obs-2', valueString: 'page-2-value' };
 
       fetchMock
         .mockResolvedValueOnce(
