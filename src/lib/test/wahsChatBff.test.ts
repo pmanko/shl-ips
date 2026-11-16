@@ -6,6 +6,11 @@ import {
   resolveEngineV1Base
 } from '../../routes/(common)/api/chat/+server';
 import { getLocalDemoPersonaFixture } from '$lib/utils/localDemoPersonas';
+import {
+  resetWahsPrewarmStateForTests,
+  warmWahsContextAfterSignIn
+} from '$lib/utils/wahsPrewarm';
+import { writable } from 'svelte/store';
 
 describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
   it('normalizes WAHS_ENGINE_URL to /v1 base cleanly', () => {
@@ -269,5 +274,84 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
       false
     );
     expect(badStrategyPayload.wahs.retrieval_strategy).toBeUndefined();
+  });
+
+  it('pre-warms /api/chat?mode=preview after sign-in data hydration, deduplicates, and skips on /chat or demo mode', async () => {
+    resetWahsPrewarmStateForTests();
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const mockFetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ x_wahs: { ok: true } }), { status: 200 });
+    });
+    const fakeAuth = { getAccessToken: vi.fn(async () => 'jwt-real-token') };
+    const fakeFhir = {
+      masterPatient: writable({ resource: { id: 'pat-1' } } as any),
+      getAllResourceCollections: vi.fn(() => [{} as any, {} as any])
+    };
+
+    // Skips in demo mode or on /chat
+    expect(
+      await warmWahsContextAfterSignIn({
+        authService: fakeAuth,
+        fhirDataService: fakeFhir,
+        pathname: '/data',
+        demoMode: true,
+        fetchImpl: mockFetch as any
+      })
+    ).toBe(false);
+    expect(
+      await warmWahsContextAfterSignIn({
+        authService: fakeAuth,
+        fhirDataService: fakeFhir,
+        pathname: '/chat',
+        demoMode: false,
+        fetchImpl: mockFetch as any
+      })
+    ).toBe(false);
+    expect(calls).toHaveLength(0);
+
+    // Fires once on /data
+    expect(
+      await warmWahsContextAfterSignIn({
+        authService: fakeAuth,
+        fhirDataService: fakeFhir,
+        pathname: '/data',
+        demoMode: false,
+        fetchImpl: mockFetch as any
+      })
+    ).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('/api/chat?mode=preview');
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+      model: 'wahs-26b-kb',
+      wahs: { retrieval_strategy: 'condensation_kb', sharing_posture: 'patient_self' }
+    });
+
+    // Deduplicates identical key
+    expect(
+      await warmWahsContextAfterSignIn({
+        authService: fakeAuth,
+        fhirDataService: fakeFhir,
+        pathname: '/data',
+        demoMode: false,
+        fetchImpl: mockFetch as any
+      })
+    ).toBe(false);
+    expect(calls).toHaveLength(1);
+
+    // Swallows errors gracefully on new key
+    fakeFhir.masterPatient.set({ resource: { id: 'pat-2' } } as any);
+    const errFetch = vi.fn(async () => {
+      throw new Error('network down');
+    });
+    expect(
+      await warmWahsContextAfterSignIn({
+        authService: fakeAuth,
+        fhirDataService: fakeFhir,
+        pathname: '/data',
+        demoMode: false,
+        fetchImpl: errFetch as any
+      })
+    ).toBe(false);
   });
 });
