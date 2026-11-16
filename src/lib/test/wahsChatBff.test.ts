@@ -192,6 +192,16 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.data[0].id).toBe('wahs-12b-kb');
+    expect(body.default_model).toBe('wahs-26b-kb');
+
+    const implicitModelPayload = buildEngineChatPayload(
+      {
+        messages: [{ role: 'user', content: 'Check default model' }]
+      },
+      false,
+      false
+    );
+    expect(implicitModelPayload.model).toBe('wahs-26b-kb');
   });
 
   it('builds valid multi-source WAHS FHIR R4 fixtures for alex and leo local demo personas', () => {

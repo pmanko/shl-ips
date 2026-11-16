@@ -112,9 +112,9 @@
       groupLabel: 'Condensation + 4-Layer Clinical KB',
       pathway: 'condensation_kb',
       options: [
-        { id: 'wahs-12b-kb', label: 'WAHS Engine · Gemma 4 12B + 4-Layer KB (Recommended)', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:12b' },
-        { id: 'wahs-e4b-kb', label: 'WAHS Engine · Gemma 4 E4B + 4-Layer KB (Fast)', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:e4b' },
-        { id: 'wahs-26b-kb', label: 'WAHS Engine · Gemma 4 26B + 4-Layer KB (Deep Synthesis)', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:26b' },
+        { id: 'wahs-26b-kb', label: 'WAHS Engine · Gemma 4 26B + 4-Layer KB (Default)', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:26b' },
+        { id: 'wahs-12b-kb', label: 'WAHS Engine · Gemma 4 12B + 4-Layer KB', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:12b' },
+        { id: 'wahs-e4b-kb', label: 'WAHS Engine · Gemma 4 E4B + 4-Layer KB (Compact)', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:e4b' },
         { id: 'wahs-qwen3-14b-kb', label: 'WAHS · Qwen 3 14B + 4-Layer KB', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/qwen3:14b' },
         { id: 'wahs-qwen3-8b-kb', label: 'WAHS · Qwen 3 8B + 4-Layer KB', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/qwen3:8b' }
       ]
@@ -157,7 +157,8 @@
 
   let discoveredExtraModels: string[] = [];
 
-  let selectedModel = 'wahs-12b-kb';
+  let selectedModel = 'wahs-26b-kb';
+  let userChangedModel = false;
   let selectedBudgetTag: 'auto' | '4k' | '8k' | '16k' | '32k' = 'auto';
   let activePersona = 'alex';
   let sharingPosture: SharingPosture = 'patient_self';
@@ -459,6 +460,15 @@
       const resp = await fetch('/api/chat', { method: 'GET', headers });
       if (!resp.ok) return;
       const body = await resp.json();
+      if (typeof body?.default_model === 'string' && body.default_model.trim() && !userChangedModel) {
+        const nextDefault = body.default_model.trim();
+        if (nextDefault !== selectedModel) {
+          selectedModel = nextDefault;
+          if (loadedPartitionKey !== null) {
+            await refreshContextPreview(nextDefault, selectedBudgetTag);
+          }
+        }
+      }
       if (Array.isArray(body?.data) && body.data.length > 0) {
         discoveredExtraModels = body.data
           .map((m: any) => String(m?.id || '').trim())
@@ -519,6 +529,7 @@
   }
 
   async function handleModelChange(event?: Event) {
+    userChangedModel = true;
     const nextModel = (event?.target as HTMLSelectElement | null)?.value ?? selectedModel;
     selectedModel = nextModel;
     await refreshContextPreview(nextModel, selectedBudgetTag);
