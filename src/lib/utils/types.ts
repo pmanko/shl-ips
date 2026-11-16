@@ -213,6 +213,7 @@ export interface IAuthService {
   signinCallback(): Promise<User | undefined>;
   storeUser(user: User | null): void;
   login(): Promise<void>;
+  loginWithSeededProfile?(slug: string): Promise<User>;
   renewToken(): Promise<User | null>;
   logout(): Promise<void>;
   isAuthenticated(): Promise<boolean | undefined>;

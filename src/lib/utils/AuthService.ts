@@ -8,6 +8,7 @@ import {
 import { isLocalDemoMode } from '$lib/utils/localDemoPersonas';
 import { derived, writable, type Writable, type Readable } from 'svelte/store';
 import { type User, UserManager } from 'oidc-client-ts';
+import { decodeJwt } from 'jose';
 import { INSTANCE_CONFIG } from '$lib/config/instance_config';
 import type { IAuthService } from '$lib/utils/types';
 
@@ -15,6 +16,16 @@ import type { IAuthService } from '$lib/utils/types';
 // callback that keeps failing surfaces an error instead of redirecting forever.
 const CALLBACK_RETRY_KEY = 'auth:callbackRetry';
 const DEMO_PERSONA_STORAGE_KEY = 'wahs:demoPersona';
+const AUTH_METHOD_STORAGE_KEY = 'wahs:authMethod';
+
+function decodeJwtPayload(jwt?: string): Record<string, any> {
+  if (!jwt || typeof jwt !== 'string' || !jwt.includes('.')) return {};
+  try {
+    return (decodeJwt(jwt) as Record<string, any>) || {};
+  } catch {
+    return {};
+  }
+}
 
 function buildLocalDemoUser(persona: string = 'alex'): User {
   const isLeo = persona === 'leo';
@@ -209,6 +220,9 @@ export class AuthService implements IAuthService {
       const user = await this.userManager.signinCallback();
       sessionStorage.removeItem(CALLBACK_RETRY_KEY);
       if (user) {
+        if (typeof sessionStorage !== 'undefined') {
+          sessionStorage.removeItem(AUTH_METHOD_STORAGE_KEY);
+        }
         this.redirect_url = user.url_state ?? "";
         this.storeUser(user);
         return user;
@@ -265,6 +279,81 @@ export class AuthService implements IAuthService {
       });
     this.loginInProgress = redirect;
     return await redirect;
+  }
+
+  async loginWithSeededProfile(slug: string): Promise<User> {
+    if (isLocalDemoMode()) {
+      const demoUser = this.setDemoPersona(slug);
+      await this.syncTokenToServer('local-demo-token').catch(() => false);
+      return demoUser;
+    }
+
+    const resp = await fetch('/auth/seeded-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug })
+    });
+    const data = await resp.json().catch(() => ({} as Record<string, any>));
+    if (!resp.ok) {
+      throw new Error(data?.message || data?.error || `Seeded profile sign-in failed (${resp.status})`);
+    }
+    if (data?.localDemo) {
+      return this.setDemoPersona(slug);
+    }
+    if (!data?.access_token) {
+      throw new Error('Seeded profile sign-in response missing access_token');
+    }
+
+    const claims = {
+      ...decodeJwtPayload(data.access_token),
+      ...decodeJwtPayload(data.id_token)
+    };
+    const acct = data.account || {};
+    const nowSec = Math.floor(Date.now() / 1000);
+    const expiresIn = Number(data.expires_in) > 0 ? Number(data.expires_in) : 300;
+    const expiresAt = typeof claims.exp === 'number' ? claims.exp : nowSec + expiresIn;
+    const scopeStr = String(data.scope || 'openid profile email');
+    const profile = {
+      ...claims,
+      sub: String(claims.sub || acct.slug || slug),
+      given_name: claims.given_name || acct.givenName || acct.name || slug,
+      family_name: claims.family_name || acct.familyName || '',
+      name: claims.name || acct.name || slug,
+      email: claims.email || acct.email || '',
+      preferred_username: claims.preferred_username || acct.email || slug
+    };
+
+    const persistedPayload = {
+      id_token: data.id_token,
+      session_state: data.session_state ?? null,
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      token_type: String(data.token_type || 'Bearer'),
+      scope: scopeStr,
+      profile,
+      expires_at: expiresAt
+    };
+
+    const user = {
+      ...persistedPayload,
+      state: undefined,
+      url_state: undefined,
+      get expires_in() {
+        return Math.max(0, Math.floor((this.expires_at ?? 0) - Date.now() / 1000));
+      },
+      get expired() {
+        return (this.expires_at ?? 0) <= Math.floor(Date.now() / 1000);
+      },
+      scopes: scopeStr.split(/\s+/).filter(Boolean),
+      toStorageString: () => JSON.stringify(persistedPayload)
+    } as unknown as User;
+
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(CALLBACK_RETRY_KEY);
+      sessionStorage.setItem(AUTH_METHOD_STORAGE_KEY, 'seeded_profile');
+    }
+    this.storeUser(user);
+    return user;
   }
 
   async isAuthenticated(): Promise<boolean | undefined> {
@@ -359,9 +448,25 @@ export class AuthService implements IAuthService {
     }
   }
 
+  protected navigateTo(url: string): void {
+    if (typeof window !== 'undefined') {
+      window.location.assign(url);
+    }
+  }
+
   async logout(): Promise<void> {
     if (typeof window !== 'undefined') {
       await fetch('/auth/settoken', { method: 'DELETE' }).catch(() => {});
+    }
+    const isSeededAuth =
+      typeof sessionStorage !== 'undefined' &&
+      sessionStorage.getItem(AUTH_METHOD_STORAGE_KEY) === 'seeded_profile';
+    if (isSeededAuth) {
+      sessionStorage.removeItem(AUTH_METHOD_STORAGE_KEY);
+      await this.userManager.removeUser();
+      this.storeUser(null);
+      this.navigateTo('/');
+      return;
     }
     await this.userManager.signoutRedirect();
   }

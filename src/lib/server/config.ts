@@ -18,6 +18,37 @@ export const SERVER_LOCAL_DEMO_MODE = Boolean(
     (process.env.VITE_LOCAL_DEMO === '1' || process.env.VITE_LOCAL_DEMO === 'true'))
 );
 
+export const PUBLIC_AUTH_URL =
+  process.env.VITE_AUTH_URL || 'http://localhost:8088/realms/wahs';
+
+export const SERVER_AUTH_CLIENT_ID =
+  process.env.VITE_AUTH_CLIENT_ID || 'shl_creator';
+
+export const SEEDED_PROFILES_ENABLED =
+  process.env.WAHS_ENABLE_SEEDED_PROFILES !== 'false';
+
+export const SEEDED_DEMO_PASSWORD =
+  process.env.WAHS_SEEDED_DEMO_PASSWORD || 'wahs-demo-2026';
+
+export function resolveInternalKeycloakRealmUrl(): string {
+  const explicit = (
+    process.env.KEYCLOAK_INTERNAL_URL ||
+    process.env.SERVER_AUTH_URL ||
+    ''
+  )
+    .trim()
+    .replace(/\/+$/, '');
+  if (explicit) {
+    return explicit;
+  }
+  try {
+    const pub = new URL(PUBLIC_AUTH_URL);
+    return `http://keycloak:8080${pub.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return 'http://keycloak:8080/realms/wahs';
+  }
+}
+
 export const CONFIDENTIAL_HOSTS: Record<string, any> = {
   aetna: {
     tokenEndpoint: process.env.AETNA_TOKEN_ENDPOINT,

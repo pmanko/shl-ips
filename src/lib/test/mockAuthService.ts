@@ -44,6 +44,12 @@ export class MockAuthService implements IAuthService {
     this.authenticated.set(true);
   }
 
+  async loginWithSeededProfile(): Promise<User> {
+    this.user.set(this.fakeUser);
+    this.authenticated.set(true);
+    return this.fakeUser as User;
+  }
+
   async renewToken(): Promise<User | null> {
     return this.fakeUser;
   }

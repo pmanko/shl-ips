@@ -28,6 +28,25 @@
   import type { IAuthService } from '$lib/utils/types';
   import FHIRDataService from '$lib/utils/FHIRDataService';
   import { imagePreload } from '$lib/utils/preloadImages';
+  import { SEEDED_DEMO_ACCOUNTS } from '$lib/utils/seededProfiles';
+
+  let switchingProfile = false;
+  async function switchSeededProfile(slug: string) {
+    if (switchingProfile || typeof authService.loginWithSeededProfile !== 'function') return;
+    switchingProfile = true;
+    try {
+      await authService.loginWithSeededProfile(slug);
+      if (typeof window !== 'undefined') {
+        const currentPath = $page.url.pathname || '/data';
+        const dest =
+          currentPath.startsWith('/auth') || currentPath === '/' ? '/data' : currentPath;
+        window.location.assign(dest);
+      }
+    } catch (err) {
+      console.error('Switch patient profile failed:', err);
+      switchingProfile = false;
+    }
+  }
 
   let authService: IAuthService = getContext('authService');
   let authenticated = authService.authenticated;
@@ -213,7 +232,7 @@
             <DropdownToggle color="primary" nav caret class={`header-link ${activeItem === "account" ? "active" : "" }`}>
               <Icon name="person-circle"/> Account
             </DropdownToggle>
-            <DropdownMenu end style="max-height: 350px; overflow:auto">
+            <DropdownMenu end style="max-height: 440px; overflow:auto">
               <DropdownItem header>
                 Welcome, {get(fhirDataService.demographics)?.firstName ?? $user.profile.given_name ?? $user.profile.preferred_username} ({$user.profile.email})
                 {#if $user.profile.idp === 'google'}
@@ -227,6 +246,24 @@
                 on:click={() => {
                   authService.logout();
                 }}><Icon name="box-arrow-right"/> Sign Out</DropdownItem>
+              {#if typeof authService.loginWithSeededProfile === 'function'}
+                <DropdownItem divider />
+                <DropdownItem header>Switch Patient Profile</DropdownItem>
+                {#each SEEDED_DEMO_ACCOUNTS as acct (acct.slug)}
+                  {@const isCurrent = String($user?.profile?.email || '').toLowerCase() === acct.email.toLowerCase()}
+                  <DropdownItem
+                    disabled={switchingProfile || isCurrent}
+                    on:click={() => switchSeededProfile(acct.slug)}
+                  >
+                    <div class="d-flex justify-content-between align-items-center gap-2">
+                      <span>{acct.name}</span>
+                      <span class="text-muted" style="font-size: 0.72rem;">
+                        {isCurrent ? '✓ Active' : acct.cohort}
+                      </span>
+                    </div>
+                  </DropdownItem>
+                {/each}
+              {/if}
                 {#if INSTANCE_CONFIG.advanced}
                   <DropdownItem divider />
                   <DropdownItem header>Demo Options</DropdownItem>

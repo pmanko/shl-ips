@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
+import * as jose from 'jose';
 import { AuthService } from '../utils/AuthService';
 
 // vi.mock factories are hoisted above imports, so anything they reference
@@ -316,6 +317,74 @@ describe('AuthService', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: 'some-token' })
+    });
+  });
+
+  describe('loginWithSeededProfile', () => {
+    it('stores a Keycloak seeded-profile User with refresh_token and logs out locally', async () => {
+      const service = new AuthService();
+      const manager = latestManager();
+      const headerB64 = jose.base64url.encode(
+        new TextEncoder().encode(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+      );
+      const payloadB64 = jose.base64url.encode(
+        new TextEncoder().encode(
+          JSON.stringify({
+            sub: 'kc-sub-marcus',
+            email: 'marcus.vance@wahs.local',
+            given_name: 'Marcus',
+            family_name: 'Vance',
+            name: 'Marcus Vance',
+            exp: Math.floor(Date.now() / 1000) + 600
+          })
+        )
+      );
+      const fakeJwt = `${headerB64}.${payloadB64}.sig`;
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          account: {
+            slug: 'marcus',
+            name: 'Marcus Vance',
+            givenName: 'Marcus',
+            familyName: 'Vance',
+            email: 'marcus.vance@wahs.local'
+          },
+          access_token: fakeJwt,
+          id_token: fakeJwt,
+          refresh_token: 'refresh-tok-marcus',
+          token_type: 'Bearer',
+          scope: 'openid profile email',
+          expires_in: 600
+        })
+      });
+
+      const user = await service.loginWithSeededProfile('marcus');
+
+      expect(fetchMock).toHaveBeenCalledWith('/auth/seeded-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: 'marcus' })
+      });
+      expect(user.access_token).toBe(fakeJwt);
+      expect(user.refresh_token).toBe('refresh-tok-marcus');
+      expect(user.profile.email).toBe('marcus.vance@wahs.local');
+      expect(manager.storeUser).toHaveBeenCalledTimes(1);
+      expect(get(service.authenticated)).toBe(true);
+      expect(sessionStorage.getItem('wahs:authMethod')).toBe('seeded_profile');
+
+      fetchMock.mockResolvedValueOnce({ ok: true });
+      const navSpy = vi.spyOn(service as any, 'navigateTo').mockImplementation(() => {});
+      await service.logout();
+
+      expect(fetchMock).toHaveBeenCalledWith('/auth/settoken', { method: 'DELETE' });
+      expect(manager.removeUser).toHaveBeenCalled();
+      expect(manager.signoutRedirect).not.toHaveBeenCalled();
+      expect(navSpy).toHaveBeenCalledWith('/');
+      expect(sessionStorage.getItem('wahs:authMethod')).toBeNull();
+      expect(get(service.authenticated)).toBe(false);
     });
   });
 });
