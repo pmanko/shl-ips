@@ -561,6 +561,23 @@
           if (dataStr === '[DONE]') break;
           try {
             const parsed = JSON.parse(dataStr);
+            const xws = parsed.x_wahs_stream;
+            if (xws) {
+              if (xws.citation_map) {
+                assistantTurn.citationMap = xws.citation_map;
+              }
+              if (xws.prefix_cache_key_hash) {
+                latestPrefixHash = xws.prefix_cache_key_hash;
+                assistantTurn.prefixHash = xws.prefix_cache_key_hash;
+              }
+              if (xws.event === 'tool_round' && xws.reset_content) {
+                assistantTurn.content = '';
+                if (loadedPartitionKey === requestPartitionKey) {
+                  messages = [...messages.slice(0, -1), { ...assistantTurn }];
+                  await scrollToBottom();
+                }
+              }
+            }
             const xw = parsed.x_wahs || parsed.wahs_metadata;
             if (xw) {
               latestXWahs = xw;
