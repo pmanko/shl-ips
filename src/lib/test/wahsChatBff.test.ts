@@ -203,4 +203,61 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     expect(leo.masterPatient.link).toHaveLength(3);
     expect(leo.collections).toHaveLength(3);
   });
+
+  it('forwards retrieval_strategy and boolean pathway flags cleanly when supplied', () => {
+    const ragPayload = buildEngineChatPayload(
+      {
+        model: 'wahs-26b-rag@32k',
+        messages: [{ role: 'user', content: 'Summarize recent discharge instructions' }],
+        wahs: {
+          target_budget_tokens: 32768,
+          sharing_posture: 'patient_self',
+          retrieval_strategy: 'note_rag',
+          enable_kb: true,
+          enable_temporal_digest: true,
+          enable_overflow_tools: true
+        }
+      },
+      false,
+      false
+    );
+
+    expect(ragPayload.model).toBe('wahs-26b-rag@32k');
+    expect(ragPayload.wahs.retrieval_strategy).toBe('note_rag');
+    expect(ragPayload.wahs.enable_kb).toBe(true);
+    expect(ragPayload.wahs.enable_temporal_digest).toBe(true);
+    expect(ragPayload.wahs.enable_overflow_tools).toBe(true);
+    expect(ragPayload.wahs.target_budget_tokens).toBe(32768);
+
+    const chartOnlyPayload = buildEngineChatPayload(
+      {
+        model: 'wahs-26b-raw@16k',
+        messages: [{ role: 'user', content: 'What meds am I taking?' }],
+        wahs: {
+          retrieval_strategy: 'chart_only',
+          enable_kb: false,
+          enable_temporal_digest: false,
+          enable_overflow_tools: false
+        }
+      },
+      false,
+      false
+    );
+    expect(chartOnlyPayload.wahs.retrieval_strategy).toBe('chart_only');
+    expect(chartOnlyPayload.wahs.enable_kb).toBe(false);
+    expect(chartOnlyPayload.wahs.enable_temporal_digest).toBe(false);
+    expect(chartOnlyPayload.wahs.enable_overflow_tools).toBe(false);
+
+    // Invalid retrieval_strategy strings must be omitted
+    const badStrategyPayload = buildEngineChatPayload(
+      {
+        model: 'wahs-12b-kb',
+        messages: [{ role: 'user', content: 'Hi' }],
+        wahs: { retrieval_strategy: 'unknown_mode' }
+      },
+      false,
+      false
+    );
+    expect(badStrategyPayload.wahs.retrieval_strategy).toBeUndefined();
+  });
 });
