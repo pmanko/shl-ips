@@ -16,6 +16,7 @@ export function fakeAuth(overrides: Partial<IAuthService & { userId: any }> = {}
     signinCallback: vi.fn(),
     storeUser: vi.fn(),
     login: vi.fn(),
+    loginWithSeededProfile: vi.fn(),
     renewToken: vi.fn(),
     logout: vi.fn(),
     isAuthenticated: vi.fn(),

@@ -8,6 +8,7 @@ import {
 import { isLocalDemoMode } from '$lib/utils/localDemoPersonas';
 import { derived, writable, type Writable, type Readable } from 'svelte/store';
 import { type User, UserManager } from 'oidc-client-ts';
+import { decodeJwt } from 'jose';
 import { INSTANCE_CONFIG } from '$lib/config/instance_config';
 import type { IAuthService } from '$lib/utils/types';
 
@@ -15,6 +16,56 @@ import type { IAuthService } from '$lib/utils/types';
 // callback that keeps failing surfaces an error instead of redirecting forever.
 const CALLBACK_RETRY_KEY = 'auth:callbackRetry';
 const DEMO_PERSONA_STORAGE_KEY = 'wahs:demoPersona';
+const AUTH_METHOD_STORAGE_KEY = 'wahs:authMethod';
+const SEEDED_PROFILE_SLUG_KEY = 'wahs:seededProfileSlug';
+const PROACTIVE_REFRESH_BUFFER_SEC = 90;
+
+function safeStorageGet(kind: 'localStorage' | 'sessionStorage', key: string): string | null {
+  try {
+    if (typeof window !== 'undefined' && window[kind]) {
+      return window[kind].getItem(key);
+    }
+    const store = (globalThis as Record<string, any>)[kind];
+    return store ? store.getItem(key) : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeStorageSet(kind: 'localStorage' | 'sessionStorage', key: string, value: string): void {
+  try {
+    if (typeof window !== 'undefined' && window[kind]) {
+      window[kind].setItem(key, value);
+      return;
+    }
+    const store = (globalThis as Record<string, any>)[kind];
+    store?.setItem(key, value);
+  } catch {
+    // Ignore storage quota or WebKit restriction errors
+  }
+}
+
+function safeStorageRemove(kind: 'localStorage' | 'sessionStorage', key: string): void {
+  try {
+    if (typeof window !== 'undefined' && window[kind]) {
+      window[kind].removeItem(key);
+      return;
+    }
+    const store = (globalThis as Record<string, any>)[kind];
+    store?.removeItem(key);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function decodeJwtPayload(jwt?: string): Record<string, any> {
+  if (!jwt || typeof jwt !== 'string' || !jwt.includes('.')) return {};
+  try {
+    return (decodeJwt(jwt) as Record<string, any>) || {};
+  } catch {
+    return {};
+  }
+}
 
 function buildLocalDemoUser(persona: string = 'alex'): User {
   const isLeo = persona === 'leo';
@@ -50,6 +101,8 @@ export class AuthService implements IAuthService {
   private userManager: UserManager;
   protected redirect_url: string = "";
   private loginInProgress: Promise<void> | null = null;
+  private renewInProgress: Promise<User | null | undefined> | null = null;
+  private quietRecoverInProgress: Promise<User | null> | null = null;
   private processingCallback = false;
 
   private _user: Writable<User | null> = writable(null);
@@ -65,10 +118,7 @@ export class AuthService implements IAuthService {
   constructor() {
     const demoMode = isLocalDemoMode();
     if (demoMode) {
-      const savedPersona =
-        typeof window !== 'undefined'
-          ? window.localStorage.getItem(DEMO_PERSONA_STORAGE_KEY) || 'alex'
-          : 'alex';
+      const savedPersona = safeStorageGet('localStorage', DEMO_PERSONA_STORAGE_KEY) || 'alex';
       const demoUser = buildLocalDemoUser(savedPersona);
       this._user.set(demoUser);
       this._authenticated.set(true);
@@ -80,7 +130,7 @@ export class AuthService implements IAuthService {
       silent_redirect_uri: AUTH_SILENT_REDIRECT_URI,
       post_logout_redirect_uri: AUTH_POST_LOGOUT_URI,
       // iframeScriptOrigin: "http://localhost:3000",
-      scope: "openid profile online_access",
+      scope: "openid profile email online_access",
       automaticSilentRenew: !demoMode,
     };
     this.userManager = new UserManager(settings);
@@ -93,16 +143,22 @@ export class AuthService implements IAuthService {
         await this.syncTokenToServer(user.access_token);
       }
     });
-    this.userManager.events.addSilentRenewError((error: Error) => {
+    this.userManager.events.addSilentRenewError(async (error: Error) => {
       console.error('Silent renew failed', error);
-      return this.sessionEnded();
+      const recovered = await this.recoverSessionQuietly();
+      if (!recovered) {
+        return this.sessionEnded();
+      }
     });
-    this.userManager.events.addAccessTokenExpired(() => {
+    this.userManager.events.addAccessTokenExpired(async () => {
       // Safety net in case automaticSilentRenew's own retry didn't recover in time.
       // Skipped mid-callback: a stale expired user left in sessionStorage fires
       // this on page load, and clearing it would race the sign-in in progress.
       if (this.processingCallback) return;
-      return this.sessionEnded();
+      const recovered = await this.recoverSessionQuietly();
+      if (!recovered) {
+        return this.sessionEnded();
+      }
     });
   }
 
@@ -144,9 +200,7 @@ export class AuthService implements IAuthService {
   }
 
   setDemoPersona(persona: string): User {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(DEMO_PERSONA_STORAGE_KEY, persona);
-    }
+    safeStorageSet('localStorage', DEMO_PERSONA_STORAGE_KEY, persona);
     const demoUser = buildLocalDemoUser(persona);
     this._user.set(demoUser);
     this._authenticated.set(true);
@@ -154,10 +208,7 @@ export class AuthService implements IAuthService {
   }
 
   getDemoPersona(): string {
-    if (typeof window !== 'undefined') {
-      return window.localStorage.getItem(DEMO_PERSONA_STORAGE_KEY) || 'alex';
-    }
-    return 'alex';
+    return safeStorageGet('localStorage', DEMO_PERSONA_STORAGE_KEY) || 'alex';
   }
 
   async getUser(): Promise<User | null> {
@@ -174,13 +225,17 @@ export class AuthService implements IAuthService {
     }
     try {
       const user = await this.getUser();
-      if (user && !user.expired && user?.access_token) {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const expiringSoon = Boolean(
+        user?.expires_at && user.expires_at <= nowSec + PROACTIVE_REFRESH_BUFFER_SEC
+      );
+      if (user && !user.expired && !expiringSoon && user?.access_token) {
         return user.access_token;
       } else {
         // renewToken handles its own failures (including signing in again)
-        const user = await this.renewToken();
-        return user?.access_token;
-      } 
+        const refreshed = await this.renewToken();
+        return refreshed?.access_token;
+      }
     } catch (error) {
       await this.handleError(error);
     }
@@ -207,8 +262,10 @@ export class AuthService implements IAuthService {
     this.processingCallback = true;
     try {
       const user = await this.userManager.signinCallback();
-      sessionStorage.removeItem(CALLBACK_RETRY_KEY);
+      safeStorageRemove('sessionStorage', CALLBACK_RETRY_KEY);
       if (user) {
+        safeStorageRemove('sessionStorage', AUTH_METHOD_STORAGE_KEY);
+        safeStorageRemove('sessionStorage', SEEDED_PROFILE_SLUG_KEY);
         this.redirect_url = user.url_state ?? "";
         this.storeUser(user);
         return user;
@@ -217,13 +274,13 @@ export class AuthService implements IAuthService {
       // A callback can fail after a long idle, e.g. the IdP's login page timed
       // out or the sign-in state was cleared. Restart login once; the IdP
       // session from the login that just happened usually completes it silently.
-      if (sessionStorage.getItem(CALLBACK_RETRY_KEY)) {
-        sessionStorage.removeItem(CALLBACK_RETRY_KEY);
+      if (safeStorageGet('sessionStorage', CALLBACK_RETRY_KEY)) {
+        safeStorageRemove('sessionStorage', CALLBACK_RETRY_KEY);
         this._error.set(error);
         console.error(error);
         return;
       }
-      sessionStorage.setItem(CALLBACK_RETRY_KEY, '1');
+      safeStorageSet('sessionStorage', CALLBACK_RETRY_KEY, '1');
       await this.handleError(error);
     } finally {
       this.processingCallback = false;
@@ -265,6 +322,98 @@ export class AuthService implements IAuthService {
       });
     this.loginInProgress = redirect;
     return await redirect;
+  }
+
+  private buildAndStoreTokenResponseUser(
+    data: Record<string, any>,
+    fallback: {
+      slug?: string;
+      profile?: Record<string, any>;
+      refresh_token?: string;
+      id_token?: string;
+      session_state?: any;
+      scope?: string;
+    } = {}
+  ): User {
+    const claims = {
+      ...decodeJwtPayload(data.access_token),
+      ...decodeJwtPayload(data.id_token || fallback.id_token)
+    };
+    const acct = data.account || {};
+    const prevProfile = fallback.profile || {};
+    const slug = fallback.slug || '';
+    const nowSec = Math.floor(Date.now() / 1000);
+    const expiresIn = Number(data.expires_in) > 0 ? Number(data.expires_in) : 300;
+    const expiresAt = typeof claims.exp === 'number' ? claims.exp : nowSec + expiresIn;
+    const scopeStr = String(data.scope || fallback.scope || 'openid profile email');
+    const profile = {
+      ...prevProfile,
+      ...claims,
+      sub: String(claims.sub || prevProfile.sub || acct.slug || slug),
+      given_name: claims.given_name || prevProfile.given_name || acct.givenName || acct.name || slug,
+      family_name: claims.family_name || prevProfile.family_name || acct.familyName || '',
+      name: claims.name || prevProfile.name || acct.name || slug,
+      email: claims.email || prevProfile.email || acct.email || '',
+      preferred_username:
+        claims.preferred_username || prevProfile.preferred_username || acct.email || slug
+    };
+
+    const persistedPayload = {
+      id_token: data.id_token ?? fallback.id_token,
+      session_state: data.session_state ?? fallback.session_state ?? null,
+      access_token: data.access_token,
+      refresh_token: data.refresh_token ?? fallback.refresh_token,
+      token_type: String(data.token_type || 'Bearer'),
+      scope: scopeStr,
+      profile,
+      expires_at: expiresAt
+    };
+
+    const user = {
+      ...persistedPayload,
+      state: undefined,
+      url_state: undefined,
+      get expires_in() {
+        return Math.max(0, Math.floor((this.expires_at ?? 0) - Date.now() / 1000));
+      },
+      get expired() {
+        return (this.expires_at ?? 0) <= Math.floor(Date.now() / 1000);
+      },
+      scopes: scopeStr.split(/\s+/).filter(Boolean),
+      toStorageString: () => JSON.stringify(persistedPayload)
+    } as unknown as User;
+
+    this.storeUser(user);
+    return user;
+  }
+
+  async loginWithSeededProfile(slug: string): Promise<User> {
+    if (isLocalDemoMode()) {
+      const demoUser = this.setDemoPersona(slug);
+      await this.syncTokenToServer('local-demo-token').catch(() => false);
+      return demoUser;
+    }
+
+    const resp = await fetch('/auth/seeded-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug })
+    });
+    const data = await resp.json().catch(() => ({} as Record<string, any>));
+    if (!resp.ok) {
+      throw new Error(data?.message || data?.error || `Seeded profile sign-in failed (${resp.status})`);
+    }
+    if (data?.localDemo) {
+      return this.setDemoPersona(slug);
+    }
+    if (!data?.access_token) {
+      throw new Error('Seeded profile sign-in response missing access_token');
+    }
+
+    safeStorageRemove('sessionStorage', CALLBACK_RETRY_KEY);
+    safeStorageSet('sessionStorage', AUTH_METHOD_STORAGE_KEY, 'seeded_profile');
+    safeStorageSet('sessionStorage', SEEDED_PROFILE_SLUG_KEY, slug);
+    return this.buildAndStoreTokenResponseUser(data, { slug });
   }
 
   async isAuthenticated(): Promise<boolean | undefined> {
@@ -337,29 +486,114 @@ export class AuthService implements IAuthService {
     }
   }
 
-  async renewToken(): Promise<User | null> {
+  private async _attemptQuietRecovery(): Promise<User | null> {
+    let stored: User | null = null;
     try {
-      const user = await this.userManager.signinSilent();
-      if (user) {
-        this.storeUser(user);
-        if (user.access_token) {
-          // Awaited here (rather than left to addUserLoaded) so callers that
-          // depend on the cookie being set, like invalidateAll(), don't race it.
-          const synced = await this.syncTokenToServer(user.access_token);
-          if (!synced) {
-            await this.login();
-          }
+      stored = (await this.userManager.getUser()) ?? null;
+    } catch {
+      stored = null;
+    }
+    if (stored?.refresh_token) {
+      try {
+        const resp = await fetch('/auth/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: stored.refresh_token })
+        });
+        const data = await resp.json().catch(() => ({} as Record<string, any>));
+        if (resp.ok && data?.access_token) {
+          return this.buildAndStoreTokenResponseUser(data, {
+            slug: safeStorageGet('sessionStorage', SEEDED_PROFILE_SLUG_KEY) || undefined,
+            profile: stored.profile as Record<string, any> | undefined,
+            refresh_token: stored.refresh_token,
+            id_token: stored.id_token,
+            session_state: stored.session_state,
+            scope: stored.scope
+          });
         }
-        return user;
-      } else {
-        throw Error('Unable to authenticate user in background');
+      } catch {
+        // Fall through to seeded-profile recovery if configured
       }
-    } catch (error) {
-      await this.handleError(error);
+    }
+
+    const seededSlug = safeStorageGet('sessionStorage', SEEDED_PROFILE_SLUG_KEY);
+    if (seededSlug) {
+      try {
+        return await this.loginWithSeededProfile(seededSlug);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  private async recoverSessionQuietly(): Promise<User | null> {
+    if (this.quietRecoverInProgress) {
+      return await this.quietRecoverInProgress;
+    }
+    const promise = this._attemptQuietRecovery().finally(() => {
+      this.quietRecoverInProgress = null;
+    });
+    this.quietRecoverInProgress = promise;
+    return await promise;
+  }
+
+  async renewToken(): Promise<User | null> {
+    if (this.renewInProgress) {
+      return (await this.renewInProgress) ?? null;
+    }
+    const promise = (async () => {
+      try {
+        const quiet = await this.recoverSessionQuietly();
+        if (quiet) {
+          return quiet;
+        }
+        const user = await this.userManager.signinSilent();
+        if (user) {
+          this.storeUser(user);
+          if (user.access_token) {
+            // Awaited here (rather than left to addUserLoaded) so callers that
+            // depend on the cookie being set, like invalidateAll(), don't race it.
+            const synced = await this.syncTokenToServer(user.access_token);
+            if (!synced) {
+              await this.login();
+            }
+          }
+          return user;
+        } else {
+          throw Error('Unable to authenticate user in background');
+        }
+      } catch (error) {
+        await this.handleError(error);
+        return null;
+      }
+    })().finally(() => {
+      this.renewInProgress = null;
+    });
+    this.renewInProgress = promise;
+    return await promise;
+  }
+
+  protected navigateTo(url: string): void {
+    if (typeof window !== 'undefined') {
+      window.location.assign(url);
     }
   }
 
   async logout(): Promise<void> {
+    if (typeof window !== 'undefined') {
+      await fetch('/auth/settoken', { method: 'DELETE' }).catch(() => {});
+    }
+    const isSeededAuth =
+      safeStorageGet('sessionStorage', AUTH_METHOD_STORAGE_KEY) === 'seeded_profile';
+    safeStorageRemove('sessionStorage', AUTH_METHOD_STORAGE_KEY);
+    safeStorageRemove('sessionStorage', SEEDED_PROFILE_SLUG_KEY);
+    if (isSeededAuth) {
+      await this.userManager.removeUser();
+      this.storeUser(null);
+      this.navigateTo('/');
+      return;
+    }
     await this.userManager.signoutRedirect();
   }
 }

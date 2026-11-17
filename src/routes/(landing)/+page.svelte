@@ -12,12 +12,14 @@
     Col,
     Icon,
     Row } from '@sveltestrap/sveltestrap';
-  import { getContext } from 'svelte';
+  import { getContext, onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { goto } from '$app/navigation';
   import { INSTANCE_CONFIG } from '$lib/config/instance_config';
   import type { IAuthService } from '$lib/utils/types';
   import { previewRecords, previewNotes, previewShare } from '$lib/components/landing-previews';
+  import SeededProfilePicker from '$lib/components/auth/SeededProfilePicker.svelte';
+  import { findSeededProfile } from '$lib/utils/seededProfiles';
   import type { FHIRDataService } from '$lib/utils/FHIRDataService';
 
   let authService: IAuthService = getContext('authService');
@@ -25,6 +27,33 @@
   let user = authService.user;
   
   let fhirDataService: FHIRDataService = getContext('fhirDataService');
+  let autoProfileStarted = false;
+
+  onMount(async () => {
+    if (typeof window === 'undefined' || autoProfileStarted) return;
+    const qs = new URLSearchParams(window.location.search);
+    const requested = findSeededProfile(qs.get('profile') || '');
+    if (!requested) return;
+    autoProfileStarted = true;
+    const rawNext = (qs.get('next') || '').trim();
+    const fallback = INSTANCE_CONFIG.defaultRedirectURI ?? '/data';
+    const target = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : fallback;
+
+    const currentEmail = String(get(user)?.profile?.email || '').trim().toLowerCase();
+    if (get(authenticated) && currentEmail === requested.email.toLowerCase()) {
+      window.location.assign(target);
+      return;
+    }
+    if (typeof authService.loginWithSeededProfile === 'function') {
+      try {
+        await authService.loginWithSeededProfile(requested.slug);
+        window.location.assign(target);
+      } catch (err) {
+        console.error('Automatic seeded profile sign-in failed:', err);
+        autoProfileStarted = false;
+      }
+    }
+  });
 
   function checkAuth() {
     if (!get(authService.authenticated)) {
@@ -178,6 +207,11 @@
         Create an account
       </a>
     </span>
+  </Row>
+  <Row class="my-1 d-flex justify-content-center">
+    <Col class="col-sm-12 col-md-8 col-lg-6">
+      <SeededProfilePicker />
+    </Col>
   </Row>
 {/if}
 

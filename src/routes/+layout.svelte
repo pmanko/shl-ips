@@ -39,14 +39,38 @@
   setContext('toast', toastStore);
   initErrorReporter(toastStore);
 
+  function readLocalMode(): string | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = window.localStorage.getItem(MODE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeLocalMode(nextMode: string | null): void {
+    if (typeof window === 'undefined') return;
+    try {
+      if (nextMode === null) {
+        window.localStorage.removeItem(MODE_KEY);
+      } else {
+        window.localStorage.setItem(MODE_KEY, JSON.stringify(nextMode));
+      }
+    } catch {
+      // Ignore WebKit Private Browsing / storage access restrictions
+    }
+  }
+
   const MODE_KEY = 'demo_mode';
   let mode: Writable<string> = writable('normal');
-  if (INSTANCE_CONFIG.advanced && window.localStorage[MODE_KEY]) {
+  const savedMode = INSTANCE_CONFIG.advanced ? readLocalMode() : null;
+  if (INSTANCE_CONFIG.advanced && savedMode) {
     // set demo mode based on local storage state
-    mode.set(JSON.parse(window.localStorage[MODE_KEY]));
+    mode.set(savedMode);
   } else {
     $mode = 'normal';
-    window.localStorage.removeItem(MODE_KEY);
+    writeLocalMode(null);
   }
   setContext('mode', mode);
 
@@ -54,7 +78,7 @@
   setContext('isOpen', isOpen);
 
   $: {
-    if ($mode && INSTANCE_CONFIG.advanced) window.localStorage[MODE_KEY] = JSON.stringify($mode);
+    if ($mode && INSTANCE_CONFIG.advanced) writeLocalMode($mode);
   }
 
   let prevPageSize: number | undefined;

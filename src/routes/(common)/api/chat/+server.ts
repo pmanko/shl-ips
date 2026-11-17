@@ -1,5 +1,9 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { SERVER_LOCAL_DEMO_MODE, WAHS_ENGINE_URL } from '$lib/server/config';
+import {
+  SERVER_LOCAL_DEMO_MODE,
+  WAHS_DEFAULT_MODEL,
+  WAHS_ENGINE_URL
+} from '$lib/server/config';
 
 export function resolveEngineV1Base(rawUrl: string = WAHS_ENGINE_URL): string {
   const trimmed = (rawUrl || 'http://wahs-engine:8080/v1').replace(/\/+$/, '');
@@ -37,6 +41,17 @@ export function buildEngineChatPayload(
   const parsedBudget =
     rawBudget !== undefined && rawBudget !== null && rawBudget !== '' ? Number(rawBudget) : null;
 
+  const rawStrategy = wahsIn.retrieval_strategy ?? body?.retrieval_strategy;
+  const rawEnableKb = wahsIn.enable_kb ?? body?.enable_kb;
+  const rawEnableDigest = wahsIn.enable_temporal_digest ?? body?.enable_temporal_digest;
+  const rawEnableTools = wahsIn.enable_overflow_tools ?? body?.enable_overflow_tools;
+  const VALID_STRATEGIES = new Set([
+    'condensation_kb',
+    'note_rag',
+    'dynamic_fhir_tools',
+    'chart_only'
+  ]);
+
   const wahsOptions: Record<string, any> = {
     ...(parsedBudget !== null && Number.isFinite(parsedBudget) && parsedBudget > 0
       ? { target_budget_tokens: Math.trunc(parsedBudget) }
@@ -44,6 +59,12 @@ export function buildEngineChatPayload(
     sharing_posture: String(
       wahsIn.sharing_posture ?? body?.sharing_posture ?? 'patient_self'
     ),
+    ...(typeof rawStrategy === 'string' && VALID_STRATEGIES.has(rawStrategy)
+      ? { retrieval_strategy: rawStrategy }
+      : {}),
+    ...(typeof rawEnableKb === 'boolean' ? { enable_kb: rawEnableKb } : {}),
+    ...(typeof rawEnableDigest === 'boolean' ? { enable_temporal_digest: rawEnableDigest } : {}),
+    ...(typeof rawEnableTools === 'boolean' ? { enable_overflow_tools: rawEnableTools } : {}),
     chart_scope:
       wahsIn.chart_scope && typeof wahsIn.chart_scope === 'object'
         ? wahsIn.chart_scope
@@ -65,7 +86,7 @@ export function buildEngineChatPayload(
   }
 
   return {
-    model: String(body?.model || 'wahs-12b-kb'),
+    model: String(body?.model || WAHS_DEFAULT_MODEL),
     messages,
     stream: isPreview ? false : Boolean(body?.stream ?? true),
     temperature: typeof body?.temperature === 'number' ? body.temperature : 0.1,
@@ -94,15 +115,19 @@ export const GET: RequestHandler = async ({ request, fetch }) => {
       );
     }
     const payload = await upstream.json();
-    return json(payload);
+    return json({
+      ...payload,
+      default_model: payload?.default_model || WAHS_DEFAULT_MODEL
+    });
   } catch (err: any) {
     return json(
       {
         object: 'list',
+        default_model: WAHS_DEFAULT_MODEL,
         data: [
+          { id: 'wahs-26b-kb', object: 'model' },
           { id: 'wahs-12b-kb', object: 'model' },
-          { id: 'wahs-e4b-kb', object: 'model' },
-          { id: 'wahs-26b-kb', object: 'model' }
+          { id: 'wahs-e4b-kb', object: 'model' }
         ],
         fallback: true,
         warning: err?.message || 'wahs-engine unreachable'
