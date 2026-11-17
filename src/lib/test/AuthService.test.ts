@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import * as jose from 'jose';
 import { AuthService } from '../utils/AuthService';
+import { POST as setTokenPost } from '../../routes/(common)/auth/settoken/+server';
+import { POST as seededLoginPost } from '../../routes/(common)/auth/seeded-login/+server';
+import { POST as refreshPost } from '../../routes/(common)/auth/refresh/+server';
 
 // vi.mock factories are hoisted above imports, so anything they reference
 // must be created through vi.hoisted rather than a plain top-level const.
@@ -384,7 +387,144 @@ describe('AuthService', () => {
       expect(manager.signoutRedirect).not.toHaveBeenCalled();
       expect(navSpy).toHaveBeenCalledWith('/');
       expect(sessionStorage.getItem('wahs:authMethod')).toBeNull();
+      expect(sessionStorage.getItem('wahs:seededProfileSlug')).toBeNull();
       expect(get(service.authenticated)).toBe(false);
+    });
+
+    it('renews proactively within 90s via /auth/refresh and falls back to seeded-login on expiry without signing out', async () => {
+      const service = new AuthService();
+      const manager = latestManager();
+      const expiringSoon = fakeUser({
+        access_token: 'expiring-jwt',
+        refresh_token: 'kc-refresh-1',
+        expires_at: Math.floor(Date.now() / 1000) + 45,
+        expired: false
+      });
+      manager.getUser.mockResolvedValue(expiringSoon);
+      sessionStorage.setItem('wahs:seededProfileSlug', 'marcus');
+      sessionStorage.setItem('wahs:authMethod', 'seeded_profile');
+
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: true,
+          access_token: 'refreshed-jwt-1',
+          refresh_token: 'kc-refresh-2',
+          expires_in: 3600
+        })
+      });
+
+      const tok = await service.getAccessToken();
+      expect(tok).toBe('refreshed-jwt-1');
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/auth/refresh',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ refresh_token: 'kc-refresh-1' })
+        })
+      );
+      expect(manager.signinSilent).not.toHaveBeenCalled();
+
+      // Simulate refresh_token expiry firing addAccessTokenExpired: recovers quietly via seeded-login
+      const onAccessTokenExpired = manager.events.addAccessTokenExpired.mock.calls[0][0];
+      fetchMock
+        .mockResolvedValueOnce({ ok: false, json: async () => ({ error: 'invalid_grant' }) })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            access_token: 'seeded-recovered-jwt',
+            refresh_token: 'kc-refresh-3',
+            expires_in: 3600
+          })
+        });
+
+      await onAccessTokenExpired();
+      expect(get(service.authenticated)).toBe(true);
+      expect(get(service.user)?.access_token).toBe('seeded-recovered-jwt');
+      expect(manager.signinRedirect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('server cookie auth routes (Safari SameSite=Lax & /auth/refresh)', () => {
+    it('sets auth_token cookie with sameSite=lax on settoken, seeded-login, and refresh', async () => {
+      const cookieCalls: Array<{ name: string; value: string; opts: any }> = [];
+      const mockCookies = {
+        set: (name: string, value: string, opts: any) => cookieCalls.push({ name, value, opts }),
+        delete: vi.fn()
+      } as any;
+
+      fetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+      await setTokenPost({
+        request: new Request('https://wahs-web.openclinai.org/auth/settoken', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-forwarded-proto': 'https' },
+          body: JSON.stringify({ token: 'tok-set' })
+        }),
+        cookies: mockCookies,
+        url: new URL('https://wahs-web.openclinai.org/auth/settoken')
+      } as any);
+
+      const routeFetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              access_token: 'tok-kc',
+              refresh_token: 'ref-kc',
+              id_token: 'id-kc',
+              expires_in: 3600
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        )
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      await seededLoginPost({
+        request: new Request('https://wahs-web.openclinai.org/auth/seeded-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-forwarded-proto': 'https' },
+          body: JSON.stringify({ slug: 'alex' })
+        }),
+        cookies: mockCookies,
+        url: new URL('https://wahs-web.openclinai.org/auth/seeded-login'),
+        fetch: routeFetch as any
+      } as any);
+
+      routeFetch
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              access_token: 'tok-refreshed',
+              refresh_token: 'ref-kc-2',
+              expires_in: 3600
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        )
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+      const refRes = await refreshPost({
+        request: new Request('https://wahs-web.openclinai.org/auth/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-forwarded-proto': 'https' },
+          body: JSON.stringify({ refresh_token: 'ref-kc' })
+        }),
+        cookies: mockCookies,
+        url: new URL('https://wahs-web.openclinai.org/auth/refresh'),
+        fetch: routeFetch as any
+      } as any);
+      expect(refRes.status).toBe(200);
+      const refBody = await refRes.json();
+      expect(refBody.access_token).toBe('tok-refreshed');
+
+      expect(cookieCalls).toHaveLength(3);
+      for (const call of cookieCalls) {
+        expect(call.name).toBe('auth_token');
+        expect(call.opts.sameSite).toBe('lax');
+        expect(call.opts.secure).toBe(true);
+        expect(call.opts.httpOnly).toBe(true);
+      }
     });
   });
 });

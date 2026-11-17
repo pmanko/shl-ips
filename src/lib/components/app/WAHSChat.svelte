@@ -446,12 +446,28 @@
     };
   }
 
-  async function buildAuthHeaders(): Promise<Record<string, string>> {
+  async function buildAuthHeaders(forceRenew = false): Promise<Record<string, string>> {
+    if (forceRenew && !DEMO_MODE && typeof authService.renewToken === 'function') {
+      await authService.renewToken().catch(() => null);
+    }
     const token = (await authService.getAccessToken()) || 'local-demo-token';
     return {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`
     };
+  }
+
+  async function fetchChatWithAuthRetry(
+    url: string,
+    buildInit: (headers: Record<string, string>) => RequestInit
+  ): Promise<Response> {
+    const headers = await buildAuthHeaders(false);
+    let resp = await fetch(url, buildInit(headers));
+    if (resp.status === 401 && !DEMO_MODE && typeof authService.renewToken === 'function') {
+      const retryHeaders = await buildAuthHeaders(true);
+      resp = await fetch(url, buildInit(retryHeaders));
+    }
+    return resp;
   }
 
   async function loadEngineModels() {
@@ -505,16 +521,16 @@
       const profMeta = resolveEvalProfileOption(mId);
       const reqM = bTag === 'auto' ? mId : `${String(mId).split('@')[0]}@${bTag}`;
       const bVal = targetBudgetTokens ?? BUDGET_TAG_MAP[bTag] ?? null;
-      const headers = await buildAuthHeaders();
       const fhirBundle = assembleLocalDemoBundleIfNeeded();
-      const resp = await fetch('/api/chat?mode=preview', {
+      const bodyStr = JSON.stringify({
+        model: reqM,
+        wahs: buildWahsOptionsPayload(fhirBundle, buildChartScopePayload(), sharingPosture, profMeta, bVal)
+      });
+      const resp = await fetchChatWithAuthRetry('/api/chat?mode=preview', (headers) => ({
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          model: reqM,
-          wahs: buildWahsOptionsPayload(fhirBundle, buildChartScopePayload(), sharingPosture, profMeta, bVal)
-        })
-      });
+        body: bodyStr
+      }));
       if (resp.ok) {
         const preview = await resp.json();
         latestPrefixHash =
@@ -651,25 +667,25 @@
 
     const t0 = performance.now();
     try {
-      const headers = await buildAuthHeaders();
       const fhirBundle = assembleLocalDemoBundleIfNeeded();
       const historyPayload = filterMessagesForScope(
         messages.slice(0, -1),
         requestScopeSignature
       );
 
-      const response = await fetch('/api/chat', {
+      const bodyStr = JSON.stringify({
+        model: effectiveRequestModel,
+        messages: historyPayload,
+        stream: true,
+        temperature: 0.1,
+        max_tokens: 1024,
+        wahs: buildWahsOptionsPayload(fhirBundle, requestChartScope, requestSharingPosture)
+      });
+      const response = await fetchChatWithAuthRetry('/api/chat', (headers) => ({
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          model: effectiveRequestModel,
-          messages: historyPayload,
-          stream: true,
-          temperature: 0.1,
-          max_tokens: 1024,
-          wahs: buildWahsOptionsPayload(fhirBundle, requestChartScope, requestSharingPosture)
-        })
-      });
+        body: bodyStr
+      }));
 
       if (!response.ok || !response.body) {
         const errText = await response.text().catch(() => response.statusText);

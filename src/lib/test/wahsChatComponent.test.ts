@@ -427,4 +427,82 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
 
     expect(buildPartitionKey('master-patient-99', scopeSig)).toContain('master-patient-99');
   });
+
+  it('retries POST /api/chat once with a renewed token when the first request returns 401', async () => {
+    let chatPostAttempts = 0;
+    const authHeadersSeen: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/chat' && (!init?.method || init.method === 'GET')) {
+        return new Response(JSON.stringify({ data: [{ id: 'wahs-26b-kb' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      if (url.startsWith('/api/chat?mode=preview')) {
+        return new Response(JSON.stringify({ prefix_cache_key_hash: 'h1', x_wahs: {} }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      if (url === '/api/chat' && init?.method === 'POST') {
+        chatPostAttempts += 1;
+        authHeadersSeen.push(String((init.headers as Record<string, string>)?.Authorization || ''));
+        if (chatPostAttempts === 1) {
+          return new Response(JSON.stringify({ detail: 'Bearer JWT has expired.' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        return makeSseResponse('Recovered smoothly after JWT refresh.');
+      }
+      return new Response('{}', { status: 404 });
+    }) as any;
+
+    let currentTok = 'expired-token-1';
+    const authSpy = fakeAuth({
+      getAccessToken: vi.fn(async () => currentTok),
+      renewToken: vi.fn(async () => {
+        currentTok = 'fresh-token-2';
+        return { access_token: 'fresh-token-2' } as any;
+      })
+    });
+
+    const fhirDataService = new FHIRDataService(authSpy);
+    fhirDataService.addDatasetToUserResources(
+      makeSourceCollection({
+        patientId: 'ds-retry-1',
+        sourceName: 'UW Medicine',
+        sourceUri: 'uw-medicine',
+        observationText: 'A1c'
+      })
+    );
+    fhirDataService.setMasterPatient({
+      resourceType: 'Patient',
+      id: 'master-retry-1',
+      name: [{ given: ['Jordan'], family: 'Retry' }]
+    } as any);
+    fhirDataService.loading.set(false);
+
+    render(WAHSChat, {
+      context: new Map<string, unknown>([
+        ['fhirDataService', fhirDataService],
+        ['authService', authSpy],
+        ['colorMap', writable(buildColorMap(['UW Medicine']))]
+      ])
+    });
+
+    const input = await screen.findByPlaceholderText(
+      "Ask a question about Jordan Retry's health record..."
+    );
+    await fireEvent.input(input, { target: { value: 'Check my A1c' } });
+    await fireEvent.click(screen.getByRole('button', { name: /Send/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Recovered smoothly after JWT refresh.')).toBeInTheDocument();
+    });
+    expect(chatPostAttempts).toBe(2);
+    expect(authSpy.renewToken).toHaveBeenCalledTimes(1);
+    expect(authHeadersSeen).toEqual(['Bearer expired-token-1', 'Bearer fresh-token-2']);
+  });
 });

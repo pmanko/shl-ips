@@ -1,9 +1,10 @@
 import { json, error } from '@sveltejs/kit';
 import { SERVER_API_BASE } from '$lib/server/config';
+import { setAuthCookie } from '$lib/server/keycloakAuth';
 
 export const POST = async ({ request, cookies, url }) => {
   const { token } = await request.json();
-  
+
   if (!token) throw error(400, 'No token provided');
 
   // Validate the new token before setting it
@@ -17,17 +18,9 @@ export const POST = async ({ request, cookies, url }) => {
 
   if (!response.ok) throw error(401, 'Token validation failed');
 
-  const isHttps =
-    url.protocol === 'https:' ||
-    request.headers.get('x-forwarded-proto') === 'https';
-
-  // Token is valid — set the cookie server-side
-  cookies.set('auth_token', token, {
-    path: '/',
-    sameSite: 'strict',
-    secure: isHttps,
-    httpOnly: true   // more secure than document.cookie
-  });
+  // Token is valid — set the cookie server-side with SameSite=Lax so
+  // sibling-origin navigations (e.g. OpenClinAI gate/portal redirects) retain auth in Safari.
+  setAuthCookie(cookies, token, url, request);
 
   return json({ ok: true });
 };
