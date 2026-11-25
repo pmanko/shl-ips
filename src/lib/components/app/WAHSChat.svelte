@@ -82,19 +82,122 @@
     color: string;
   }
 
-  let availableModels: Array<{ id: string; label: string }> = [
-    { id: 'wahs-12b-kb', label: 'WAHS Engine · Gemma 4 12B + 4-Layer KB (Recommended)' },
-    { id: 'wahs-e4b-kb', label: 'WAHS Engine · Gemma 4 E4B + 4-Layer KB (Fast)' },
-    { id: 'wahs-26b-kb', label: 'WAHS Engine · Gemma 4 26B + 4-Layer KB (Deep Synthesis)' },
-    { id: 'gemma4:12b', label: 'CIRG GPU · Gemma 4 12B' },
-    { id: 'gemma4:e4b', label: 'CIRG GPU · Gemma 4 E4B' }
+  type RetrievalStrategy = 'note_rag' | 'condensation_kb' | 'dynamic_fhir_tools' | 'chart_only';
+  interface EvalProfileOption {
+    id: string;
+    label: string;
+    pathway: RetrievalStrategy;
+    kb: boolean;
+    tools: boolean;
+    evalModel: string;
+  }
+
+  const CURATED_EVAL_GROUPS: Array<{
+    groupLabel: string;
+    pathway: RetrievalStrategy;
+    options: EvalProfileOption[];
+  }> = [
+    {
+      groupLabel: 'Condensation + BM25 Note-RAG (#1 Eval)',
+      pathway: 'note_rag',
+      options: [
+        { id: 'wahs-26b-rag', label: 'WAHS · Gemma 4 26B + BM25 Note-RAG (#1 Eval)', pathway: 'note_rag', kb: true, tools: true, evalModel: 'ollama/gemma4:26b' },
+        { id: 'wahs-12b-rag', label: 'WAHS · Gemma 4 12B + BM25 Note-RAG', pathway: 'note_rag', kb: true, tools: true, evalModel: 'ollama/gemma4:12b' },
+        { id: 'wahs-e4b-rag', label: 'WAHS · Gemma 4 E4B + BM25 Note-RAG', pathway: 'note_rag', kb: true, tools: true, evalModel: 'ollama/gemma4:e4b' },
+        { id: 'wahs-qwen3-14b-rag', label: 'WAHS · Qwen 3 14B + BM25 Note-RAG', pathway: 'note_rag', kb: true, tools: true, evalModel: 'ollama/qwen3:14b' },
+        { id: 'wahs-qwen3-8b-rag', label: 'WAHS · Qwen 3 8B + BM25 Note-RAG', pathway: 'note_rag', kb: true, tools: true, evalModel: 'ollama/qwen3:8b' }
+      ]
+    },
+    {
+      groupLabel: 'Condensation + 4-Layer Clinical KB',
+      pathway: 'condensation_kb',
+      options: [
+        { id: 'wahs-26b-kb', label: 'WAHS Engine · Gemma 4 26B + 4-Layer KB (Default)', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:26b' },
+        { id: 'wahs-12b-kb', label: 'WAHS Engine · Gemma 4 12B + 4-Layer KB', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:12b' },
+        { id: 'wahs-e4b-kb', label: 'WAHS Engine · Gemma 4 E4B + 4-Layer KB (Compact)', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:e4b' },
+        { id: 'wahs-qwen3-14b-kb', label: 'WAHS · Qwen 3 14B + 4-Layer KB', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/qwen3:14b' },
+        { id: 'wahs-qwen3-8b-kb', label: 'WAHS · Qwen 3 8B + 4-Layer KB', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/qwen3:8b' }
+      ]
+    },
+    {
+      groupLabel: 'Dynamic FHIR Tool Querying (2k IPS + Live Tools)',
+      pathway: 'dynamic_fhir_tools',
+      options: [
+        { id: 'wahs-26b-tools', label: 'WAHS · Gemma 4 26B + Dynamic FHIR Tools', pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: 'ollama/gemma4:26b' },
+        { id: 'wahs-12b-tools', label: 'WAHS · Gemma 4 12B + Dynamic FHIR Tools', pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: 'ollama/gemma4:12b' },
+        { id: 'wahs-e4b-tools', label: 'WAHS · Gemma 4 E4B + Dynamic FHIR Tools', pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: 'ollama/gemma4:e4b' },
+        { id: 'wahs-qwen3-14b-tools', label: 'WAHS · Qwen 3 14B + Dynamic FHIR Tools', pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: 'ollama/qwen3:14b' },
+        { id: 'wahs-qwen3-8b-tools', label: 'WAHS · Qwen 3 8B + Dynamic FHIR Tools', pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: 'ollama/qwen3:8b' }
+      ]
+    },
+    {
+      groupLabel: 'Condensed Chart Only (Baseline · No KB/RAG)',
+      pathway: 'chart_only',
+      options: [
+        { id: 'wahs-26b-raw', label: 'WAHS · Gemma 4 26B Condensed FHIR Only', pathway: 'chart_only', kb: false, tools: false, evalModel: 'ollama/gemma4:26b' },
+        { id: 'wahs-12b-raw', label: 'WAHS · Gemma 4 12B Condensed FHIR Only', pathway: 'chart_only', kb: false, tools: false, evalModel: 'ollama/gemma4:12b' },
+        { id: 'wahs-e4b-raw', label: 'WAHS · Gemma 4 E4B Condensed FHIR Only', pathway: 'chart_only', kb: false, tools: false, evalModel: 'ollama/gemma4:e4b' },
+        { id: 'wahs-qwen3-14b-raw', label: 'WAHS · Qwen 3 14B Condensed FHIR Only', pathway: 'chart_only', kb: false, tools: false, evalModel: 'ollama/qwen3:14b' },
+        { id: 'wahs-qwen3-8b-raw', label: 'WAHS · Qwen 3 8B Condensed FHIR Only', pathway: 'chart_only', kb: false, tools: false, evalModel: 'ollama/qwen3:8b' }
+      ]
+    }
   ];
 
-  let selectedModel = 'wahs-12b-kb';
+  const CURATED_PROFILE_MAP = new Map<string, EvalProfileOption>(
+    CURATED_EVAL_GROUPS.flatMap((g) => g.options.map((o) => [o.id, o]))
+  );
+
+  const BUDGET_TAG_MAP: Record<string, number | null> = {
+    auto: null,
+    '4k': 4096,
+    '8k': 8192,
+    '16k': 16384,
+    '32k': 32768
+  };
+
+  let discoveredExtraModels: string[] = [];
+
+  let selectedModel = 'wahs-26b-kb';
+  let userChangedModel = false;
+  let selectedBudgetTag: 'auto' | '4k' | '8k' | '16k' | '32k' = 'auto';
   let activePersona = 'alex';
   let sharingPosture: SharingPosture = 'patient_self';
   let targetBudgetTokens: number | null = null;
   let excludedSources: Record<string, boolean> = {};
+
+  function resolveEvalProfileOption(modelId: string): EvalProfileOption {
+    const clean = String(modelId || '').split('@')[0];
+    const known = CURATED_PROFILE_MAP.get(clean);
+    if (known) return known;
+    if (clean.endsWith('-rag') || clean.endsWith('-note-rag')) {
+      return { id: clean, label: clean, pathway: 'note_rag', kb: true, tools: true, evalModel: clean };
+    }
+    if (clean.endsWith('-tools')) {
+      return { id: clean, label: clean, pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: clean };
+    }
+    if (clean.endsWith('-chart') || clean.endsWith('-raw')) {
+      return { id: clean, label: clean, pathway: 'chart_only', kb: false, tools: false, evalModel: clean };
+    }
+    return { id: clean, label: clean, pathway: 'condensation_kb', kb: true, tools: true, evalModel: clean };
+  }
+
+  function buildCanonicalEvalArm(modelId: string, bTag: string): string {
+    const prof = resolveEvalProfileOption(modelId);
+    const pfxMap: Record<RetrievalStrategy, string> = {
+      note_rag: 'wahs-engine-rag:',
+      condensation_kb: 'wahs-engine-kb:',
+      dynamic_fhir_tools: 'wahs-engine-tools:',
+      chart_only: 'wahs-engine-chart:'
+    };
+    const effTag = bTag === 'auto' ? (prof.pathway === 'dynamic_fhir_tools' ? '2k' : '16k') : bTag;
+    return `${pfxMap[prof.pathway]}${prof.evalModel}@${effTag}`;
+  }
+
+  $: activeProfileMeta = resolveEvalProfileOption(selectedModel);
+  $: effectiveBudgetOverride = targetBudgetTokens ?? BUDGET_TAG_MAP[selectedBudgetTag] ?? null;
+  $: effectiveRequestModel =
+    selectedBudgetTag === 'auto' ? selectedModel : `${String(selectedModel).split('@')[0]}@${selectedBudgetTag}`;
+  $: canonicalEvalArm = buildCanonicalEvalArm(selectedModel, selectedBudgetTag);
 
   let inputPrompt = '';
   let isStreaming = false;
@@ -343,12 +446,28 @@
     };
   }
 
-  async function buildAuthHeaders(): Promise<Record<string, string>> {
+  async function buildAuthHeaders(forceRenew = false): Promise<Record<string, string>> {
+    if (forceRenew && !DEMO_MODE && typeof authService.renewToken === 'function') {
+      await authService.renewToken().catch(() => null);
+    }
     const token = (await authService.getAccessToken()) || 'local-demo-token';
     return {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`
     };
+  }
+
+  async function fetchChatWithAuthRetry(
+    url: string,
+    buildInit: (headers: Record<string, string>) => RequestInit
+  ): Promise<Response> {
+    const headers = await buildAuthHeaders(false);
+    let resp = await fetch(url, buildInit(headers));
+    if (resp.status === 401 && !DEMO_MODE && typeof authService.renewToken === 'function') {
+      const retryHeaders = await buildAuthHeaders(true);
+      resp = await fetch(url, buildInit(retryHeaders));
+    }
+    return resp;
   }
 
   async function loadEngineModels() {
@@ -357,38 +476,61 @@
       const resp = await fetch('/api/chat', { method: 'GET', headers });
       if (!resp.ok) return;
       const body = await resp.json();
-      if (Array.isArray(body?.data) && body.data.length > 0) {
-        const knownLabels = new Map(availableModels.map((m) => [m.id, m.label]));
-        availableModels = body.data.map((m: any) => ({
-          id: m.id,
-          label: knownLabels.get(m.id) || `WAHS Engine · ${m.id}`
-        }));
-        if (!availableModels.some((m) => m.id === selectedModel)) {
-          selectedModel = availableModels[0].id;
+      if (typeof body?.default_model === 'string' && body.default_model.trim() && !userChangedModel) {
+        const nextDefault = body.default_model.trim();
+        if (nextDefault !== selectedModel) {
+          selectedModel = nextDefault;
+          if (loadedPartitionKey !== null) {
+            await refreshContextPreview(nextDefault, selectedBudgetTag);
+          }
         }
       }
+      if (Array.isArray(body?.data) && body.data.length > 0) {
+        discoveredExtraModels = body.data
+          .map((m: any) => String(m?.id || '').trim())
+          .filter((id: string) => Boolean(id) && !CURATED_PROFILE_MAP.has(id) && !id.endsWith('-chart'));
+      }
     } catch {
-      // Keep default model list if engine is still starting
+      // Keep curated profile list if engine is still starting
     }
   }
 
-  async function refreshContextPreview() {
+  function buildWahsOptionsPayload(
+    fhirBundle: Record<string, any> | undefined,
+    extraScope: Record<string, any>,
+    posture: SharingPosture,
+    profileMeta: EvalProfileOption = activeProfileMeta,
+    budgetVal: number | null = effectiveBudgetOverride
+  ): Record<string, any> {
+    return {
+      ...(budgetVal != null ? { target_budget_tokens: budgetVal } : {}),
+      sharing_posture: posture,
+      retrieval_strategy: profileMeta.pathway,
+      enable_kb: profileMeta.kb,
+      enable_temporal_digest: profileMeta.kb,
+      enable_overflow_tools: profileMeta.tools,
+      chart_scope: extraScope,
+      ...(fhirBundle ? { fhir_bundle: fhirBundle } : {})
+    };
+  }
+
+  async function refreshContextPreview(modelOverride?: string, budgetTagOverride?: 'auto' | '4k' | '8k' | '16k' | '32k') {
     try {
-      const headers = await buildAuthHeaders();
+      const mId = modelOverride ?? selectedModel;
+      const bTag = budgetTagOverride ?? selectedBudgetTag;
+      const profMeta = resolveEvalProfileOption(mId);
+      const reqM = bTag === 'auto' ? mId : `${String(mId).split('@')[0]}@${bTag}`;
+      const bVal = targetBudgetTokens ?? BUDGET_TAG_MAP[bTag] ?? null;
       const fhirBundle = assembleLocalDemoBundleIfNeeded();
-      const resp = await fetch('/api/chat?mode=preview', {
+      const bodyStr = JSON.stringify({
+        model: reqM,
+        wahs: buildWahsOptionsPayload(fhirBundle, buildChartScopePayload(), sharingPosture, profMeta, bVal)
+      });
+      const resp = await fetchChatWithAuthRetry('/api/chat?mode=preview', (headers) => ({
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          model: selectedModel,
-          wahs: {
-            ...(targetBudgetTokens != null ? { target_budget_tokens: targetBudgetTokens } : {}),
-            sharing_posture: sharingPosture,
-            chart_scope: buildChartScopePayload(),
-            ...(fhirBundle ? { fhir_bundle: fhirBundle } : {})
-          }
-        })
-      });
+        body: bodyStr
+      }));
       if (resp.ok) {
         const preview = await resp.json();
         latestPrefixHash =
@@ -400,6 +542,24 @@
     } catch (e) {
       console.warn('Context preview error:', e);
     }
+  }
+
+  async function handleModelChange(event?: Event) {
+    userChangedModel = true;
+    const nextModel = (event?.target as HTMLSelectElement | null)?.value ?? selectedModel;
+    selectedModel = nextModel;
+    await refreshContextPreview(nextModel, selectedBudgetTag);
+  }
+
+  async function handleBudgetTagChange(event?: Event) {
+    const raw = ((event?.target as HTMLSelectElement | null)?.value ?? selectedBudgetTag) as
+      | 'auto'
+      | '4k'
+      | '8k'
+      | '16k'
+      | '32k';
+    selectedBudgetTag = raw in BUDGET_TAG_MAP ? raw : 'auto';
+    await refreshContextPreview(selectedModel, selectedBudgetTag);
   }
 
   async function toggleSourceScope(sourceName: string) {
@@ -496,7 +656,7 @@
       role: 'assistant',
       content: '',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      model: selectedModel,
+      model: effectiveRequestModel,
       scopeSignature: requestScopeSignature
     };
 
@@ -507,30 +667,25 @@
 
     const t0 = performance.now();
     try {
-      const headers = await buildAuthHeaders();
       const fhirBundle = assembleLocalDemoBundleIfNeeded();
       const historyPayload = filterMessagesForScope(
         messages.slice(0, -1),
         requestScopeSignature
       );
 
-      const response = await fetch('/api/chat', {
+      const bodyStr = JSON.stringify({
+        model: effectiveRequestModel,
+        messages: historyPayload,
+        stream: true,
+        temperature: 0.1,
+        max_tokens: 1024,
+        wahs: buildWahsOptionsPayload(fhirBundle, requestChartScope, requestSharingPosture)
+      });
+      const response = await fetchChatWithAuthRetry('/api/chat', (headers) => ({
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          model: selectedModel,
-          messages: historyPayload,
-          stream: true,
-          temperature: 0.1,
-          max_tokens: 1024,
-          wahs: {
-            ...(targetBudgetTokens != null ? { target_budget_tokens: targetBudgetTokens } : {}),
-            sharing_posture: requestSharingPosture,
-            chart_scope: requestChartScope,
-            ...(fhirBundle ? { fhir_bundle: fhirBundle } : {})
-          }
-        })
-      });
+        body: bodyStr
+      }));
 
       if (!response.ok || !response.body) {
         const errText = await response.text().catch(() => response.statusText);
@@ -561,6 +716,23 @@
           if (dataStr === '[DONE]') break;
           try {
             const parsed = JSON.parse(dataStr);
+            const xws = parsed.x_wahs_stream;
+            if (xws) {
+              if (xws.citation_map) {
+                assistantTurn.citationMap = xws.citation_map;
+              }
+              if (xws.prefix_cache_key_hash) {
+                latestPrefixHash = xws.prefix_cache_key_hash;
+                assistantTurn.prefixHash = xws.prefix_cache_key_hash;
+              }
+              if (xws.event === 'tool_round' && xws.reset_content) {
+                assistantTurn.content = '';
+                if (loadedPartitionKey === requestPartitionKey) {
+                  messages = [...messages.slice(0, -1), { ...assistantTurn }];
+                  await scrollToBottom();
+                }
+              }
+            }
             const xw = parsed.x_wahs || parsed.wahs_metadata;
             if (xw) {
               latestXWahs = xw;
@@ -867,12 +1039,41 @@
           bsSize="sm"
           bind:value={selectedModel}
           disabled={isStreaming}
-          style="width: auto; max-width: 230px; font-size: 0.78rem;"
+          on:change={handleModelChange}
+          style="width: auto; max-width: 250px; font-size: 0.78rem;"
           aria-label="Select clinical LLM"
         >
-          {#each availableModels as m}
-            <option value={m.id}>{m.label}</option>
+          {#each CURATED_EVAL_GROUPS as grp}
+            <optgroup label={grp.groupLabel}>
+              {#each grp.options as opt}
+                <option value={opt.id}>{opt.label}</option>
+              {/each}
+            </optgroup>
           {/each}
+          {#if discoveredExtraModels.length > 0}
+            <optgroup label="Discovered Engine Models">
+              {#each discoveredExtraModels as extraId}
+                <option value={extraId}>WAHS Engine · {extraId}</option>
+              {/each}
+            </optgroup>
+          {/if}
+        </Input>
+
+        <Input
+          type="select"
+          bsSize="sm"
+          bind:value={selectedBudgetTag}
+          disabled={isStreaming}
+          on:change={handleBudgetTagChange}
+          style="width: auto; font-size: 0.78rem;"
+          aria-label="Select chart token budget"
+          title="Chart condensation token budget"
+        >
+          <option value="auto">Budget: Auto</option>
+          <option value="4k">Budget: 4k</option>
+          <option value="8k">Budget: 8k</option>
+          <option value="16k">Budget: 16k</option>
+          <option value="32k">Budget: 32k</option>
         </Input>
 
         <Button
@@ -922,11 +1123,20 @@
           <span class="text-primary">
             <Icon name="cpu" />
             <strong>Engine:</strong> {latestXWahs.ai_provenance.engine}
-            {#if latestXWahs.ai_provenance.kb_enabled}
+            {#if latestXWahs.retrieval_strategy === 'note_rag'}
+              · BM25 Note-RAG ({latestXWahs.note_rag?.passages_retrieved ?? 0} passages)
+            {:else if latestXWahs.retrieval_strategy === 'dynamic_fhir_tools'}
+              · Dynamic FHIR Tools
+            {:else if latestXWahs.retrieval_strategy === 'chart_only' || !latestXWahs.ai_provenance.kb_enabled}
+              · Chart Only (No KB)
+            {:else if latestXWahs.ai_provenance.kb_enabled}
               · 4-Layer KB Active
             {/if}
           </span>
         {/if}
+        <span class="font-monospace text-muted">
+          Arm: {canonicalEvalArm}
+        </span>
         {#if latestPrefixHash}
           <span class="font-monospace text-muted">
             KV-Prefix: #{latestPrefixHash.slice(0, 10)}

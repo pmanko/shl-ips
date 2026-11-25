@@ -1,21 +1,56 @@
 export const AUTOCODER_API_KEY = process.env.AUTOCODER_API_KEY;
 
-export const API_BASE = process.env.VITE_API_BASE;
+export const API_BASE = process.env.SERVER_API_BASE || process.env.VITE_API_BASE;
 
 export const REDIRECT_URI = process.env.REDIRECT_URI;
 
-export const SERVER_API_BASE = process.env.VITE_API_BASE;
+export const SERVER_API_BASE = process.env.SERVER_API_BASE || process.env.VITE_API_BASE;
 
 export const WAHS_ENGINE_URL =
   process.env.WAHS_ENGINE_URL ||
   process.env.VITE_WAHS_ENGINE_URL ||
   'http://wahs-engine:8080/v1';
 
+export const WAHS_DEFAULT_MODEL =
+  (process.env.WAHS_DEFAULT_MODEL || 'wahs-26b-kb').trim() || 'wahs-26b-kb';
+
 export const SERVER_LOCAL_DEMO_MODE = Boolean(
-  process.env.VITE_LOCAL_DEMO === '1' ||
-  process.env.VITE_LOCAL_DEMO === 'true' ||
-  !process.env.VITE_API_BASE
+  process.env.SERVER_LOCAL_DEMO_MODE === '1' ||
+  process.env.SERVER_LOCAL_DEMO_MODE === 'true' ||
+  (process.env.SERVER_LOCAL_DEMO_MODE !== 'false' &&
+    (process.env.VITE_LOCAL_DEMO === '1' || process.env.VITE_LOCAL_DEMO === 'true'))
 );
+
+export const PUBLIC_AUTH_URL =
+  process.env.VITE_AUTH_URL || 'http://localhost:8088/realms/wahs';
+
+export const SERVER_AUTH_CLIENT_ID =
+  process.env.VITE_AUTH_CLIENT_ID || 'shl_creator';
+
+export const SEEDED_PROFILES_ENABLED =
+  process.env.WAHS_ENABLE_SEEDED_PROFILES !== 'false';
+
+export const SEEDED_DEMO_PASSWORD =
+  process.env.WAHS_SEEDED_DEMO_PASSWORD || 'wahs-demo-2026';
+
+export function resolveInternalKeycloakRealmUrl(): string {
+  const explicit = (
+    process.env.KEYCLOAK_INTERNAL_URL ||
+    process.env.SERVER_AUTH_URL ||
+    ''
+  )
+    .trim()
+    .replace(/\/+$/, '');
+  if (explicit) {
+    return explicit;
+  }
+  try {
+    const pub = new URL(PUBLIC_AUTH_URL);
+    return `http://keycloak:8080${pub.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return 'http://keycloak:8080/realms/wahs';
+  }
+}
 
 export const CONFIDENTIAL_HOSTS: Record<string, any> = {
   aetna: {

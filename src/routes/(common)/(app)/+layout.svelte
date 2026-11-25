@@ -14,6 +14,7 @@
   import { invalidateAll } from '$app/navigation';
   import { buildColorMap } from '$lib/utils/colors';
   import { getFriendlySourceNames } from '$lib/utils/resourceCollectionUtils';
+  import { warmWahsContextAfterSignIn } from '$lib/utils/wahsPrewarm';
 
   export let data: LayoutData;
 
@@ -85,6 +86,11 @@
     userChecked = true;
     if (!data.unauthenticated) {
       await fhirDataService.loadUserData();
+      void warmWahsContextAfterSignIn({
+        authService,
+        fhirDataService,
+        pathname: window.location.pathname
+      });
       $shlStore = await shlClient.getUserShls();
     }
   });

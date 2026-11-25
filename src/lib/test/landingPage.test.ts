@@ -40,11 +40,15 @@ describe('landing page', () => {
     expect(screen.getByText('Tell your health story')).toBeInTheDocument();
   });
 
-  it('shows a sign-in prompt when the visitor is not authenticated', () => {
+  it('shows a sign-in prompt and seeded clinical profile selector when not authenticated', () => {
     renderLandingPage({ authenticated: false });
 
     expect(screen.getByText('Sign In')).toBeInTheDocument();
     expect(screen.getByText('Create an account')).toBeInTheDocument();
+    const select = screen.getByLabelText('Choose Seeded Patient Account') as HTMLSelectElement;
+    expect(select).toBeInTheDocument();
+    expect(select.options.length).toBe(13);
+    expect(screen.getByText(/Marcus Vance \(marcus\.vance@wahs\.local\)/)).toBeInTheDocument();
     expect(screen.queryByText('Get started')).not.toBeInTheDocument();
   });
 
@@ -57,5 +61,6 @@ describe('landing page', () => {
     expect(screen.getByText(/Welcome, Jane\./)).toBeInTheDocument();
     expect(screen.getByText('Get started')).toBeInTheDocument();
     expect(screen.queryByText('Sign In')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Choose Seeded Patient Account')).not.toBeInTheDocument();
   });
 });
