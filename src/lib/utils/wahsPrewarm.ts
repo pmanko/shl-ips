@@ -59,13 +59,8 @@ export async function warmWahsContextAfterSignIn(opts: WarmWahsContextOptions): 
         Authorization: `Bearer ${token}`
       },
       body: JSON.stringify({
-        model: opts.defaultModel || 'wahs-26b-kb',
+        model: opts.defaultModel || 'wahs-26b',
         wahs: {
-          sharing_posture: 'patient_self',
-          retrieval_strategy: 'condensation_kb',
-          enable_kb: true,
-          enable_temporal_digest: true,
-          enable_overflow_tools: true,
           chart_scope: {}
         }
       })

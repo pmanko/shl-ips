@@ -26,12 +26,11 @@
   } from '$lib/utils/resourceCollectionUtils';
   import { download } from '$lib/utils/util';
   import {
+    buildChartScopeSignature,
     buildPartitionKey,
-    buildPrivacyScopeSignature,
     filterMessagesForScope,
     getScopedHistoryStorageKey,
-    resolveChatSessionKey,
-    type SharingPosture
+    resolveChatSessionKey
   } from '$lib/utils/wahsChatSession';
 
   let fhirDataService: FHIRDataService = getContext('fhirDataService');
@@ -65,7 +64,6 @@
     condensation?: any;
     scopeApplied?: any;
     aiProvenance?: any;
-    privacyNotices?: string[];
     completenessManifest?: string;
     prefixHash?: string;
     scopeSignature?: string;
@@ -82,70 +80,18 @@
     color: string;
   }
 
-  type RetrievalStrategy = 'note_rag' | 'condensation_kb' | 'dynamic_fhir_tools' | 'chart_only';
-  interface EvalProfileOption {
+  interface ModelOption {
     id: string;
     label: string;
-    pathway: RetrievalStrategy;
-    kb: boolean;
-    tools: boolean;
-    evalModel: string;
   }
 
-  const CURATED_EVAL_GROUPS: Array<{
-    groupLabel: string;
-    pathway: RetrievalStrategy;
-    options: EvalProfileOption[];
-  }> = [
-    {
-      groupLabel: 'Condensation + BM25 Note-RAG (#1 Eval)',
-      pathway: 'note_rag',
-      options: [
-        { id: 'wahs-26b-rag', label: 'WAHS · Gemma 4 26B + BM25 Note-RAG (#1 Eval)', pathway: 'note_rag', kb: true, tools: true, evalModel: 'ollama/gemma4:26b' },
-        { id: 'wahs-12b-rag', label: 'WAHS · Gemma 4 12B + BM25 Note-RAG', pathway: 'note_rag', kb: true, tools: true, evalModel: 'ollama/gemma4:12b' },
-        { id: 'wahs-e4b-rag', label: 'WAHS · Gemma 4 E4B + BM25 Note-RAG', pathway: 'note_rag', kb: true, tools: true, evalModel: 'ollama/gemma4:e4b' },
-        { id: 'wahs-qwen3-14b-rag', label: 'WAHS · Qwen 3 14B + BM25 Note-RAG', pathway: 'note_rag', kb: true, tools: true, evalModel: 'ollama/qwen3:14b' },
-        { id: 'wahs-qwen3-8b-rag', label: 'WAHS · Qwen 3 8B + BM25 Note-RAG', pathway: 'note_rag', kb: true, tools: true, evalModel: 'ollama/qwen3:8b' }
-      ]
-    },
-    {
-      groupLabel: 'Condensation + 4-Layer Clinical KB',
-      pathway: 'condensation_kb',
-      options: [
-        { id: 'wahs-26b-kb', label: 'WAHS Engine · Gemma 4 26B + 4-Layer KB (Default)', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:26b' },
-        { id: 'wahs-12b-kb', label: 'WAHS Engine · Gemma 4 12B + 4-Layer KB', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:12b' },
-        { id: 'wahs-e4b-kb', label: 'WAHS Engine · Gemma 4 E4B + 4-Layer KB (Compact)', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/gemma4:e4b' },
-        { id: 'wahs-qwen3-14b-kb', label: 'WAHS · Qwen 3 14B + 4-Layer KB', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/qwen3:14b' },
-        { id: 'wahs-qwen3-8b-kb', label: 'WAHS · Qwen 3 8B + 4-Layer KB', pathway: 'condensation_kb', kb: true, tools: true, evalModel: 'ollama/qwen3:8b' }
-      ]
-    },
-    {
-      groupLabel: 'Dynamic FHIR Tool Querying (2k IPS + Live Tools)',
-      pathway: 'dynamic_fhir_tools',
-      options: [
-        { id: 'wahs-26b-tools', label: 'WAHS · Gemma 4 26B + Dynamic FHIR Tools', pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: 'ollama/gemma4:26b' },
-        { id: 'wahs-12b-tools', label: 'WAHS · Gemma 4 12B + Dynamic FHIR Tools', pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: 'ollama/gemma4:12b' },
-        { id: 'wahs-e4b-tools', label: 'WAHS · Gemma 4 E4B + Dynamic FHIR Tools', pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: 'ollama/gemma4:e4b' },
-        { id: 'wahs-qwen3-14b-tools', label: 'WAHS · Qwen 3 14B + Dynamic FHIR Tools', pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: 'ollama/qwen3:14b' },
-        { id: 'wahs-qwen3-8b-tools', label: 'WAHS · Qwen 3 8B + Dynamic FHIR Tools', pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: 'ollama/qwen3:8b' }
-      ]
-    },
-    {
-      groupLabel: 'Condensed Chart Only (Baseline · No KB/RAG)',
-      pathway: 'chart_only',
-      options: [
-        { id: 'wahs-26b-raw', label: 'WAHS · Gemma 4 26B Condensed FHIR Only', pathway: 'chart_only', kb: false, tools: false, evalModel: 'ollama/gemma4:26b' },
-        { id: 'wahs-12b-raw', label: 'WAHS · Gemma 4 12B Condensed FHIR Only', pathway: 'chart_only', kb: false, tools: false, evalModel: 'ollama/gemma4:12b' },
-        { id: 'wahs-e4b-raw', label: 'WAHS · Gemma 4 E4B Condensed FHIR Only', pathway: 'chart_only', kb: false, tools: false, evalModel: 'ollama/gemma4:e4b' },
-        { id: 'wahs-qwen3-14b-raw', label: 'WAHS · Qwen 3 14B Condensed FHIR Only', pathway: 'chart_only', kb: false, tools: false, evalModel: 'ollama/qwen3:14b' },
-        { id: 'wahs-qwen3-8b-raw', label: 'WAHS · Qwen 3 8B Condensed FHIR Only', pathway: 'chart_only', kb: false, tools: false, evalModel: 'ollama/qwen3:8b' }
-      ]
-    }
+  const CURATED_MODEL_OPTIONS: ModelOption[] = [
+    { id: 'wahs-26b', label: 'WAHS · Gemma 4 26B (Default)' },
+    { id: 'wahs-12b', label: 'WAHS · Gemma 4 12B' },
+    { id: 'wahs-e4b', label: 'WAHS · Gemma 4 E4B (Compact)' }
   ];
 
-  const CURATED_PROFILE_MAP = new Map<string, EvalProfileOption>(
-    CURATED_EVAL_GROUPS.flatMap((g) => g.options.map((o) => [o.id, o]))
-  );
+  const CURATED_MODEL_SET = new Set(CURATED_MODEL_OPTIONS.map((o) => o.id));
 
   const BUDGET_TAG_MAP: Record<string, number | null> = {
     auto: null,
@@ -157,47 +103,19 @@
 
   let discoveredExtraModels: string[] = [];
 
-  let selectedModel = 'wahs-26b-kb';
+  let selectedModel = 'wahs-26b';
   let userChangedModel = false;
   let selectedBudgetTag: 'auto' | '4k' | '8k' | '16k' | '32k' = 'auto';
   let activePersona = 'alex';
-  let sharingPosture: SharingPosture = 'patient_self';
   let targetBudgetTokens: number | null = null;
   let excludedSources: Record<string, boolean> = {};
 
-  function resolveEvalProfileOption(modelId: string): EvalProfileOption {
-    const clean = String(modelId || '').split('@')[0];
-    const known = CURATED_PROFILE_MAP.get(clean);
-    if (known) return known;
-    if (clean.endsWith('-rag') || clean.endsWith('-note-rag')) {
-      return { id: clean, label: clean, pathway: 'note_rag', kb: true, tools: true, evalModel: clean };
-    }
-    if (clean.endsWith('-tools')) {
-      return { id: clean, label: clean, pathway: 'dynamic_fhir_tools', kb: true, tools: true, evalModel: clean };
-    }
-    if (clean.endsWith('-chart') || clean.endsWith('-raw')) {
-      return { id: clean, label: clean, pathway: 'chart_only', kb: false, tools: false, evalModel: clean };
-    }
-    return { id: clean, label: clean, pathway: 'condensation_kb', kb: true, tools: true, evalModel: clean };
-  }
-
-  function buildCanonicalEvalArm(modelId: string, bTag: string): string {
-    const prof = resolveEvalProfileOption(modelId);
-    const pfxMap: Record<RetrievalStrategy, string> = {
-      note_rag: 'wahs-engine-rag:',
-      condensation_kb: 'wahs-engine-kb:',
-      dynamic_fhir_tools: 'wahs-engine-tools:',
-      chart_only: 'wahs-engine-chart:'
-    };
-    const effTag = bTag === 'auto' ? (prof.pathway === 'dynamic_fhir_tools' ? '2k' : '16k') : bTag;
-    return `${pfxMap[prof.pathway]}${prof.evalModel}@${effTag}`;
-  }
-
-  $: activeProfileMeta = resolveEvalProfileOption(selectedModel);
   $: effectiveBudgetOverride = targetBudgetTokens ?? BUDGET_TAG_MAP[selectedBudgetTag] ?? null;
-  $: effectiveRequestModel =
-    selectedBudgetTag === 'auto' ? selectedModel : `${String(selectedModel).split('@')[0]}@${selectedBudgetTag}`;
-  $: canonicalEvalArm = buildCanonicalEvalArm(selectedModel, selectedBudgetTag);
+  $: activeEnricherIds = Array.isArray(latestXWahs?.enrichers)
+    ? (latestXWahs.enrichers as Array<{ enricher_id?: string }>)
+        .map((e) => String(e?.enricher_id || '').trim())
+        .filter(Boolean)
+    : [];
 
   let inputPrompt = '';
   let isStreaming = false;
@@ -281,8 +199,7 @@
 
   $: isSessionReady = resolvedSessionKey !== null && !$loadingData;
 
-  $: activeScopeSignature = buildPrivacyScopeSignature({
-    sharingPosture,
+  $: activeScopeSignature = buildChartScopeSignature({
     includedSources: activeIncludedSources,
     excludedSources
   });
@@ -343,7 +260,6 @@
                 condensation: lastAssistant.condensation,
                 scope_applied: lastAssistant.scopeApplied,
                 ai_provenance: lastAssistant.aiProvenance,
-                privacy_notices: lastAssistant.privacyNotices,
                 completeness_manifest: lastAssistant.completenessManifest
               };
               latestPrefixHash = lastAssistant.prefixHash || '';
@@ -488,7 +404,7 @@
       if (Array.isArray(body?.data) && body.data.length > 0) {
         discoveredExtraModels = body.data
           .map((m: any) => String(m?.id || '').trim())
-          .filter((id: string) => Boolean(id) && !CURATED_PROFILE_MAP.has(id) && !id.endsWith('-chart'));
+          .filter((id: string) => Boolean(id) && !CURATED_MODEL_SET.has(id));
       }
     } catch {
       // Keep curated profile list if engine is still starting
@@ -498,17 +414,10 @@
   function buildWahsOptionsPayload(
     fhirBundle: Record<string, any> | undefined,
     extraScope: Record<string, any>,
-    posture: SharingPosture,
-    profileMeta: EvalProfileOption = activeProfileMeta,
     budgetVal: number | null = effectiveBudgetOverride
   ): Record<string, any> {
     return {
       ...(budgetVal != null ? { target_budget_tokens: budgetVal } : {}),
-      sharing_posture: posture,
-      retrieval_strategy: profileMeta.pathway,
-      enable_kb: profileMeta.kb,
-      enable_temporal_digest: profileMeta.kb,
-      enable_overflow_tools: profileMeta.tools,
       chart_scope: extraScope,
       ...(fhirBundle ? { fhir_bundle: fhirBundle } : {})
     };
@@ -518,13 +427,11 @@
     try {
       const mId = modelOverride ?? selectedModel;
       const bTag = budgetTagOverride ?? selectedBudgetTag;
-      const profMeta = resolveEvalProfileOption(mId);
-      const reqM = bTag === 'auto' ? mId : `${String(mId).split('@')[0]}@${bTag}`;
       const bVal = targetBudgetTokens ?? BUDGET_TAG_MAP[bTag] ?? null;
       const fhirBundle = assembleLocalDemoBundleIfNeeded();
       const bodyStr = JSON.stringify({
-        model: reqM,
-        wahs: buildWahsOptionsPayload(fhirBundle, buildChartScopePayload(), sharingPosture, profMeta, bVal)
+        model: mId,
+        wahs: buildWahsOptionsPayload(fhirBundle, buildChartScopePayload(), bVal)
       });
       const resp = await fetchChatWithAuthRetry('/api/chat?mode=preview', (headers) => ({
         method: 'POST',
@@ -574,29 +481,9 @@
     }
     excludedSources = next;
     errorBanner = '';
-    const nextScope = buildPrivacyScopeSignature({
-      sharingPosture,
+    const nextScope = buildChartScopeSignature({
       includedSources: getCurrentIncludedSourceNames(next),
       excludedSources: next
-    });
-    if (resolvedSessionKey) {
-      lastAutoPreviewPartitionKey = buildPartitionKey(resolvedSessionKey, nextScope);
-      syncActiveConversationPartition(resolvedSessionKey, nextScope);
-    }
-    await refreshContextPreview();
-  }
-
-  async function handleSharingPostureChange(event?: Event) {
-    if (isStreaming) return;
-    const rawValue = (event?.target as HTMLSelectElement | null)?.value ?? sharingPosture;
-    const nextPosture: SharingPosture =
-      rawValue === 'external_share' ? 'external_share' : 'patient_self';
-    sharingPosture = nextPosture;
-    errorBanner = '';
-    const nextScope = buildPrivacyScopeSignature({
-      sharingPosture: nextPosture,
-      includedSources: getCurrentIncludedSourceNames(excludedSources),
-      excludedSources
     });
     if (resolvedSessionKey) {
       lastAutoPreviewPartitionKey = buildPartitionKey(resolvedSessionKey, nextScope);
@@ -613,8 +500,7 @@
     if ((fhirDataService as any).loadLocalDemoPersona) {
       await (fhirDataService as any).loadLocalDemoPersona(persona);
     }
-    const nextScope = buildPrivacyScopeSignature({
-      sharingPosture,
+    const nextScope = buildChartScopeSignature({
       includedSources: getCurrentIncludedSourceNames({}),
       excludedSources: {}
     });
@@ -636,7 +522,6 @@
 
     const requestSessionKey = resolvedSessionKey;
     const requestScopeSignature = activeScopeSignature;
-    const requestSharingPosture = sharingPosture;
     const requestChartScope = buildChartScopePayload();
     const requestPartitionKey = buildPartitionKey(requestSessionKey, requestScopeSignature);
 
@@ -656,7 +541,7 @@
       role: 'assistant',
       content: '',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      model: effectiveRequestModel,
+      model: selectedModel,
       scopeSignature: requestScopeSignature
     };
 
@@ -674,12 +559,12 @@
       );
 
       const bodyStr = JSON.stringify({
-        model: effectiveRequestModel,
+        model: selectedModel,
         messages: historyPayload,
         stream: true,
         temperature: 0.1,
         max_tokens: 1024,
-        wahs: buildWahsOptionsPayload(fhirBundle, requestChartScope, requestSharingPosture)
+        wahs: buildWahsOptionsPayload(fhirBundle, requestChartScope)
       });
       const response = await fetchChatWithAuthRetry('/api/chat', (headers) => ({
         method: 'POST',
@@ -725,13 +610,6 @@
                 latestPrefixHash = xws.prefix_cache_key_hash;
                 assistantTurn.prefixHash = xws.prefix_cache_key_hash;
               }
-              if (xws.event === 'tool_round' && xws.reset_content) {
-                assistantTurn.content = '';
-                if (loadedPartitionKey === requestPartitionKey) {
-                  messages = [...messages.slice(0, -1), { ...assistantTurn }];
-                  await scrollToBottom();
-                }
-              }
             }
             const xw = parsed.x_wahs || parsed.wahs_metadata;
             if (xw) {
@@ -740,7 +618,6 @@
               assistantTurn.condensation = xw.condensation;
               assistantTurn.scopeApplied = xw.scope_applied;
               assistantTurn.aiProvenance = xw.ai_provenance;
-              assistantTurn.privacyNotices = xw.privacy_notices || [];
               assistantTurn.completenessManifest = xw.completeness_manifest || '';
               if (xw.condensation?.prefix_cache_key_hash) {
                 latestPrefixHash = xw.condensation.prefix_cache_key_hash;
@@ -792,10 +669,9 @@
   function exportTranscript() {
     if (messages.length === 0) return;
     const lines: string[] = [
-      `# WA Health Summary — Ask WAHS Conversation Export`,
+      `# WA Health Summary - Ask WAHS Conversation Export`,
       `- **Patient Profile:** ${patientDisplayName} (DOB: ${patientBirthDate})`,
       `- **Exported:** ${new Date().toISOString()}`,
-      `- **Sharing Posture:** ${sharingPosture}`,
       `- **Scoped Sources:** ${activeIncludedSources.join(', ')}`,
       ''
     ];
@@ -896,7 +772,7 @@
 <Offcanvas
   isOpen={provenanceOpen}
   toggle={() => (provenanceOpen = !provenanceOpen)}
-  header={`FHIR Provenance Inspector — Citation [${selectedCitationKey}]`}
+  header={`FHIR Provenance Inspector - Citation [${selectedCitationKey}]`}
   placement="end"
   scroll
   style="width: min(540px, 94vw);"
@@ -998,7 +874,7 @@
         {#if $loadingData}
           <Spinner size="sm" color="primary" />
         {:else if pooledSources.length === 0}
-          <Badge color="secondary">No datasets loaded — import or add data in Add Data tab</Badge>
+          <Badge color="secondary">No datasets loaded - import or add data in Add Data tab</Badge>
         {:else}
           {#each pooledSources as src}
             {@const isIncluded = !excludedSources[src.sourceName]}
@@ -1008,8 +884,8 @@
               style="font-size: 0.76rem; font-weight: 500; border: 1px solid {src.color}; background-color: {isIncluded ? src.color : 'transparent'}; color: {isIncluded ? '#fff' : '#64748b'}; opacity: {isIncluded ? 1 : 0.65};"
               disabled={isStreaming}
               title={isIncluded
-                ? `Included in AI scope (Patient/${src.patientId}) — click to exclude`
-                : `Excluded from AI scope — click to include`}
+                ? `Included in AI scope (Patient/${src.patientId}) - click to exclude`
+                : `Excluded from AI scope - click to include`}
               on:click={() => toggleSourceScope(src.sourceName)}
             >
               <Icon name={isIncluded ? (src.isPatientAuthored ? 'journal-check' : 'check2-circle') : 'slash-circle'} />
@@ -1023,32 +899,14 @@
         <Input
           type="select"
           bsSize="sm"
-          bind:value={sharingPosture}
-          disabled={isStreaming || !isSessionReady}
-          on:change={handleSharingPostureChange}
-          style="width: auto; font-size: 0.78rem;"
-          aria-label="Privacy sharing posture"
-          title="Privacy redaction posture"
-        >
-          <option value="patient_self">Posture: Patient Self</option>
-          <option value="external_share">Posture: External Share (Redact SDOH)</option>
-        </Input>
-
-        <Input
-          type="select"
-          bsSize="sm"
           bind:value={selectedModel}
           disabled={isStreaming}
           on:change={handleModelChange}
           style="width: auto; max-width: 250px; font-size: 0.78rem;"
           aria-label="Select clinical LLM"
         >
-          {#each CURATED_EVAL_GROUPS as grp}
-            <optgroup label={grp.groupLabel}>
-              {#each grp.options as opt}
-                <option value={opt.id}>{opt.label}</option>
-              {/each}
-            </optgroup>
+          {#each CURATED_MODEL_OPTIONS as opt}
+            <option value={opt.id}>{opt.label}</option>
           {/each}
           {#if discoveredExtraModels.length > 0}
             <optgroup label="Discovered Engine Models">
@@ -1115,40 +973,22 @@
         </span>
         <span>
           <strong>Omitted Items:</strong> {latestXWahs.condensation.omitted_clinical_items ?? 0}
-          {#if latestXWahs.condensation.overflow_recovered}
-            (recovered {latestXWahs.condensation.overflow_recovered} via Tier-0)
-          {/if}
         </span>
         {#if latestXWahs.ai_provenance}
           <span class="text-primary">
             <Icon name="cpu" />
             <strong>Engine:</strong> {latestXWahs.ai_provenance.engine}
-            {#if latestXWahs.retrieval_strategy === 'note_rag'}
-              · BM25 Note-RAG ({latestXWahs.note_rag?.passages_retrieved ?? 0} passages)
-            {:else if latestXWahs.retrieval_strategy === 'dynamic_fhir_tools'}
-              · Dynamic FHIR Tools
-            {:else if latestXWahs.retrieval_strategy === 'chart_only' || !latestXWahs.ai_provenance.kb_enabled}
-              · Chart Only (No KB)
-            {:else if latestXWahs.ai_provenance.kb_enabled}
-              · 4-Layer KB Active
+            {#if activeEnricherIds.length > 0}
+              · Enrichers: {activeEnricherIds.join(', ')}
             {/if}
           </span>
         {/if}
-        <span class="font-monospace text-muted">
-          Arm: {canonicalEvalArm}
-        </span>
         {#if latestPrefixHash}
           <span class="font-monospace text-muted">
             KV-Prefix: #{latestPrefixHash.slice(0, 10)}
           </span>
         {/if}
       </div>
-      {#if latestXWahs.privacy_notices?.length > 0}
-        <div class="mt-1 text-warning-emphasis" style="font-size: 0.74rem;">
-          <Icon name="shield-lock" class="me-1" />
-          {latestXWahs.privacy_notices.join(' · ')}
-        </div>
-      {/if}
     {/if}
   </CardBody>
 </Card>
@@ -1233,7 +1073,7 @@
                         ? 'background: #fef3c7; color: #92400e; border: 1px solid #f59e0b;'
                         : 'background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd;'}"
                       title={citeEntry
-                        ? `[${part.value}] ${citeEntry.source || ''} · ${citeEntry.resourceType || ''} — ${citeEntry.display || 'Click to inspect FHIR resource'}`
+                        ? `[${part.value}] ${citeEntry.source || ''} · ${citeEntry.resourceType || ''} - ${citeEntry.display || 'Click to inspect FHIR resource'}`
                         : `Click to inspect citation [${part.value}]`}
                       on:click={() => openProvenanceDrawer(part.value, turn.citationMap)}
                     >
