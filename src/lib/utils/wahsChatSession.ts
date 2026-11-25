@@ -1,5 +1,3 @@
-export type SharingPosture = 'patient_self' | 'external_share';
-
 export interface ScopedChatMessageLike {
   role: 'user' | 'assistant';
   content: string;
@@ -18,21 +16,18 @@ export function normalizeSourceNames(names: Iterable<string>): string[] {
   return Array.from(unique).sort();
 }
 
-/** Build a collision-free privacy scope signature for sharing posture and active sources. */
-export function buildPrivacyScopeSignature(params: {
-  sharingPosture: SharingPosture;
+/** Build a collision-free chart scope signature for active/excluded sources. */
+export function buildChartScopeSignature(params: {
   includedSources?: Iterable<string>;
   excludedSources?: Record<string, boolean>;
 }): string {
-  const posture: SharingPosture =
-    params.sharingPosture === 'external_share' ? 'external_share' : 'patient_self';
   const included = normalizeSourceNames(params.includedSources ?? []);
   const excluded = normalizeSourceNames(
     Object.entries(params.excludedSources ?? {})
       .filter(([, value]) => Boolean(value))
       .map(([key]) => key)
   );
-  return `${posture}|inc:${JSON.stringify(included)}|exc:${JSON.stringify(excluded)}`;
+  return `inc:${JSON.stringify(included)}|exc:${JSON.stringify(excluded)}`;
 }
 
 /** Resolve the persistent session key once identity is ready, returning null while loading. */
@@ -48,17 +43,17 @@ export function resolveChatSessionKey(params: {
   return trimmedPatientId.length > 0 ? trimmedPatientId : null;
 }
 
-/** Build the localStorage key for a given session and privacy scope partition. */
+/** Build the localStorage key for a given session and chart scope partition. */
 export function getScopedHistoryStorageKey(sessionKey: string, scopeSignature: string): string {
   return `wahs:sveltekit:chatHistory:v4:${sessionKey}:${scopeSignature}`;
 }
 
-/** Build an in-memory partition identifier combining session identity and privacy scope. */
+/** Build an in-memory partition identifier combining session identity and chart scope. */
 export function buildPartitionKey(sessionKey: string, scopeSignature: string): string {
   return `${sessionKey}::${scopeSignature}`;
 }
 
-/** Filter conversation turns strictly to those created under the active privacy scope. */
+/** Filter conversation turns strictly to those created under the active chart scope. */
 export function filterMessagesForScope<T extends ScopedChatMessageLike>(
   messages: readonly T[],
   activeScopeSignature: string

@@ -12,7 +12,7 @@ export const WAHS_ENGINE_URL =
   'http://wahs-engine:8080/v1';
 
 export const WAHS_DEFAULT_MODEL =
-  (process.env.WAHS_DEFAULT_MODEL || 'wahs-26b-kb').trim() || 'wahs-26b-kb';
+  (process.env.WAHS_DEFAULT_MODEL || 'wahs-26b').trim() || 'wahs-26b';
 
 export const SERVER_LOCAL_DEMO_MODE = Boolean(
   process.env.SERVER_LOCAL_DEMO_MODE === '1' ||

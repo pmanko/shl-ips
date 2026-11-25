@@ -19,14 +19,16 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     expect(resolveEngineV1Base('http://127.0.0.1:8095/')).toBe('http://127.0.0.1:8095/v1');
   });
 
-  it('strips browser-supplied fhir_bundle when allowLocalBundle is false (production zero-privilege boundary)', () => {
+  it('strips browser-supplied fhir_bundle and omits legacy flags when building payload', () => {
     const payload = buildEngineChatPayload(
       {
-        model: 'wahs-12b-kb',
+        model: 'wahs-12b',
         messages: [{ role: 'user', content: 'Check my medications' }],
         wahs: {
           target_budget_tokens: 2400,
           sharing_posture: 'external_share',
+          retrieval_strategy: 'note_rag',
+          enable_kb: true,
           chart_scope: { include_sources: ['UW Medicine Cardiology & Nephrology'] },
           overlay_resources: [{ resourceType: 'Goal', description: { text: 'Lower A1c' } }],
           fhir_bundle: { resourceType: 'Bundle', entry: [] }
@@ -36,9 +38,11 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
       false
     );
 
-    expect(payload.model).toBe('wahs-12b-kb');
+    expect(payload.model).toBe('wahs-12b');
     expect(payload.wahs.target_budget_tokens).toBe(2400);
-    expect(payload.wahs.sharing_posture).toBe('external_share');
+    expect(payload.wahs.sharing_posture).toBeUndefined();
+    expect(payload.wahs.retrieval_strategy).toBeUndefined();
+    expect(payload.wahs.enable_kb).toBeUndefined();
     expect(payload.wahs.chart_scope).toEqual({
       include_sources: ['UW Medicine Cardiology & Nephrology']
     });
@@ -47,7 +51,7 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
 
     const defaultPayload = buildEngineChatPayload(
       {
-        model: 'wahs-12b-kb',
+        model: 'wahs-12b',
         messages: [{ role: 'user', content: 'Check my medications' }]
       },
       false,
@@ -58,7 +62,7 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     for (const invalidBudget of [0, -50, Number.NaN, null, '']) {
       const invalidPayload = buildEngineChatPayload(
         {
-          model: 'wahs-12b-kb',
+          model: 'wahs-12b',
           messages: [{ role: 'user', content: 'Check invalid budget' }],
           wahs: { target_budget_tokens: invalidBudget }
         },
@@ -86,7 +90,7 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
         Authorization: 'Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLXByZXYifQ.sig'
       },
       body: JSON.stringify({
-        model: 'wahs-12b-kb',
+        model: 'wahs-12b',
         wahs: {
           chart_scope: {},
           fhir_bundle: { resourceType: 'Bundle', entry: [] }
@@ -125,7 +129,7 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
   it('forwards Keycloak Bearer JWT, chart_scope, and streams SSE + x_wahs back to browser', async () => {
     const sseBody = [
       'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Warfarin [1] interacts with ibuprofen [2]."},"finish_reason":null}]}\n\n',
-      'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"x_wahs":{"citation_map":{"1":{"id":"alex-med-warfarin","resourceType":"MedicationRequest","source":"UW Medicine","display":"Warfarin 5 mg"}},"ai_provenance":{"resourceType":"Provenance","profile":"http://hl7.org/fhir/uv/aitransparency/StructureDefinition/AI-Provenance","recorded_model":"gemma4:12b","engine":"wahs-engine/0.1.0"}}}\n\n',
+      'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"x_wahs":{"citation_map":{"1":{"id":"alex-med-warfarin","resourceType":"MedicationRequest","source":"UW Medicine","display":"Warfarin 5 mg"}},"ai_provenance":{"resourceType":"Provenance","profile":"http://hl7.org/fhir/uv/aitransparency/StructureDefinition/AI-Provenance","recorded_model":"ollama/gemma4:12b","engine":"wahs-engine/0.2.0"}}}\n\n',
       'data: [DONE]\n\n'
     ].join('');
 
@@ -146,7 +150,7 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
         Authorization: 'Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyLTFhMmIifQ.sig'
       },
       body: JSON.stringify({
-        model: 'wahs-12b-kb',
+        model: 'wahs-12b',
         stream: true,
         messages: [{ role: 'user', content: 'Any interactions?' }],
         wahs: {
@@ -182,9 +186,9 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     expect(streamedText).toContain('AI-Provenance');
   });
 
-  it('proxies GET /api/chat to wahs-engine /v1/models', async () => {
+  it('proxies GET /api/chat to wahs-engine /v1/models and defaults to wahs-26b', async () => {
     const mockFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ object: 'list', data: [{ id: 'wahs-12b-kb' }] }), {
+      new Response(JSON.stringify({ object: 'list', data: [{ id: 'wahs-12b' }] }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       })
@@ -196,8 +200,8 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     const res = await GET({ request: req, fetch: mockFetch } as any);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.data[0].id).toBe('wahs-12b-kb');
-    expect(body.default_model).toBe('wahs-26b-kb');
+    expect(body.data[0].id).toBe('wahs-12b');
+    expect(body.default_model).toBe('wahs-26b');
 
     const implicitModelPayload = buildEngineChatPayload(
       {
@@ -206,7 +210,7 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
       false,
       false
     );
-    expect(implicitModelPayload.model).toBe('wahs-26b-kb');
+    expect(implicitModelPayload.model).toBe('wahs-26b');
   });
 
   it('builds valid multi-source WAHS FHIR R4 fixtures for alex and leo local demo personas', () => {
@@ -217,63 +221,6 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     const leo = getLocalDemoPersonaFixture('leo');
     expect(leo.masterPatient.link).toHaveLength(3);
     expect(leo.collections).toHaveLength(3);
-  });
-
-  it('forwards retrieval_strategy and boolean pathway flags cleanly when supplied', () => {
-    const ragPayload = buildEngineChatPayload(
-      {
-        model: 'wahs-26b-rag@32k',
-        messages: [{ role: 'user', content: 'Summarize recent discharge instructions' }],
-        wahs: {
-          target_budget_tokens: 32768,
-          sharing_posture: 'patient_self',
-          retrieval_strategy: 'note_rag',
-          enable_kb: true,
-          enable_temporal_digest: true,
-          enable_overflow_tools: true
-        }
-      },
-      false,
-      false
-    );
-
-    expect(ragPayload.model).toBe('wahs-26b-rag@32k');
-    expect(ragPayload.wahs.retrieval_strategy).toBe('note_rag');
-    expect(ragPayload.wahs.enable_kb).toBe(true);
-    expect(ragPayload.wahs.enable_temporal_digest).toBe(true);
-    expect(ragPayload.wahs.enable_overflow_tools).toBe(true);
-    expect(ragPayload.wahs.target_budget_tokens).toBe(32768);
-
-    const chartOnlyPayload = buildEngineChatPayload(
-      {
-        model: 'wahs-26b-raw@16k',
-        messages: [{ role: 'user', content: 'What meds am I taking?' }],
-        wahs: {
-          retrieval_strategy: 'chart_only',
-          enable_kb: false,
-          enable_temporal_digest: false,
-          enable_overflow_tools: false
-        }
-      },
-      false,
-      false
-    );
-    expect(chartOnlyPayload.wahs.retrieval_strategy).toBe('chart_only');
-    expect(chartOnlyPayload.wahs.enable_kb).toBe(false);
-    expect(chartOnlyPayload.wahs.enable_temporal_digest).toBe(false);
-    expect(chartOnlyPayload.wahs.enable_overflow_tools).toBe(false);
-
-    // Invalid retrieval_strategy strings must be omitted
-    const badStrategyPayload = buildEngineChatPayload(
-      {
-        model: 'wahs-12b-kb',
-        messages: [{ role: 'user', content: 'Hi' }],
-        wahs: { retrieval_strategy: 'unknown_mode' }
-      },
-      false,
-      false
-    );
-    expect(badStrategyPayload.wahs.retrieval_strategy).toBeUndefined();
   });
 
   it('pre-warms /api/chat?mode=preview after sign-in data hydration, deduplicates, and skips on /chat or demo mode', async () => {
@@ -289,7 +236,6 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
       getAllResourceCollections: vi.fn(() => [{} as any, {} as any])
     };
 
-    // Skips in demo mode or on /chat
     expect(
       await warmWahsContextAfterSignIn({
         authService: fakeAuth,
@@ -310,7 +256,6 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     ).toBe(false);
     expect(calls).toHaveLength(0);
 
-    // Fires once on /data
     expect(
       await warmWahsContextAfterSignIn({
         authService: fakeAuth,
@@ -323,11 +268,10 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe('/api/chat?mode=preview');
     expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
-      model: 'wahs-26b-kb',
-      wahs: { retrieval_strategy: 'condensation_kb', sharing_posture: 'patient_self' }
+      model: 'wahs-26b',
+      wahs: { chart_scope: {} }
     });
 
-    // Deduplicates identical key
     expect(
       await warmWahsContextAfterSignIn({
         authService: fakeAuth,
@@ -339,7 +283,6 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     ).toBe(false);
     expect(calls).toHaveLength(1);
 
-    // Swallows errors gracefully on new key
     fakeFhir.masterPatient.set({ resource: { id: 'pat-2' } } as any);
     const errFetch = vi.fn(async () => {
       throw new Error('network down');

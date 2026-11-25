@@ -41,30 +41,10 @@ export function buildEngineChatPayload(
   const parsedBudget =
     rawBudget !== undefined && rawBudget !== null && rawBudget !== '' ? Number(rawBudget) : null;
 
-  const rawStrategy = wahsIn.retrieval_strategy ?? body?.retrieval_strategy;
-  const rawEnableKb = wahsIn.enable_kb ?? body?.enable_kb;
-  const rawEnableDigest = wahsIn.enable_temporal_digest ?? body?.enable_temporal_digest;
-  const rawEnableTools = wahsIn.enable_overflow_tools ?? body?.enable_overflow_tools;
-  const VALID_STRATEGIES = new Set([
-    'condensation_kb',
-    'note_rag',
-    'dynamic_fhir_tools',
-    'chart_only'
-  ]);
-
   const wahsOptions: Record<string, any> = {
     ...(parsedBudget !== null && Number.isFinite(parsedBudget) && parsedBudget > 0
       ? { target_budget_tokens: Math.trunc(parsedBudget) }
       : {}),
-    sharing_posture: String(
-      wahsIn.sharing_posture ?? body?.sharing_posture ?? 'patient_self'
-    ),
-    ...(typeof rawStrategy === 'string' && VALID_STRATEGIES.has(rawStrategy)
-      ? { retrieval_strategy: rawStrategy }
-      : {}),
-    ...(typeof rawEnableKb === 'boolean' ? { enable_kb: rawEnableKb } : {}),
-    ...(typeof rawEnableDigest === 'boolean' ? { enable_temporal_digest: rawEnableDigest } : {}),
-    ...(typeof rawEnableTools === 'boolean' ? { enable_overflow_tools: rawEnableTools } : {}),
     chart_scope:
       wahsIn.chart_scope && typeof wahsIn.chart_scope === 'object'
         ? wahsIn.chart_scope
@@ -125,9 +105,9 @@ export const GET: RequestHandler = async ({ request, fetch }) => {
         object: 'list',
         default_model: WAHS_DEFAULT_MODEL,
         data: [
-          { id: 'wahs-26b-kb', object: 'model' },
-          { id: 'wahs-12b-kb', object: 'model' },
-          { id: 'wahs-e4b-kb', object: 'model' }
+          { id: 'wahs-26b', object: 'model' },
+          { id: 'wahs-12b', object: 'model' },
+          { id: 'wahs-e4b', object: 'model' }
         ],
         fallback: true,
         warning: err?.message || 'wahs-engine unreachable'

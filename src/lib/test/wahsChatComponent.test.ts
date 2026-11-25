@@ -8,8 +8,8 @@ import { ResourceCollection } from '$lib/utils/ResourceCollection';
 import { CATEGORY_SYSTEM, METHOD_SYSTEM, SOURCE_NAME_SYSTEM } from '$lib/config/config';
 import { CATEGORIES, METHODS } from '$lib/config/tags';
 import {
+  buildChartScopeSignature,
   buildPartitionKey,
-  buildPrivacyScopeSignature,
   filterMessagesForScope,
   getScopedHistoryStorageKey,
   resolveChatSessionKey
@@ -70,7 +70,7 @@ function makeSseResponse(replyText: string): Response {
       x_wahs: {
         citation_map: {},
         condensation: { tier: 1, tier_name: 'Focused', actual_tokens: 120, budget_tokens: 2048 },
-        ai_provenance: { engine: 'wahs-engine', recorded_model: 'wahs-12b-kb' }
+        ai_provenance: { engine: 'wahs-engine', recorded_model: 'wahs-12b' }
       }
     })}\n\n`,
     'data: [DONE]\n\n'
@@ -91,30 +91,21 @@ function makeSseResponse(replyText: string): Response {
 }
 
 describe('wahsChatSession helpers', () => {
-  it('builds collision-free privacy scope signatures across postures and source lists', () => {
-    const s1 = buildPrivacyScopeSignature({
-      sharingPosture: 'patient_self',
+  it('builds collision-free chart scope signatures across included/excluded source lists', () => {
+    const s1 = buildChartScopeSignature({
       includedSources: ['B Clinic', 'A Clinic'],
       excludedSources: { 'C, Inc | Behavioral': true, 'Unused Clinic': false }
     });
-    const s2 = buildPrivacyScopeSignature({
-      sharingPosture: 'patient_self',
+    const s2 = buildChartScopeSignature({
       includedSources: ['A Clinic', 'B Clinic'],
       excludedSources: { 'C, Inc | Behavioral': true }
     });
-    const sExternal = buildPrivacyScopeSignature({
-      sharingPosture: 'external_share',
-      includedSources: ['A Clinic', 'B Clinic'],
-      excludedSources: { 'C, Inc | Behavioral': true }
-    });
-    const sSplitCollisionTest = buildPrivacyScopeSignature({
-      sharingPosture: 'patient_self',
+    const sSplitCollisionTest = buildChartScopeSignature({
       includedSources: ['A Clinic'],
       excludedSources: { 'B Clinic': true, 'C, Inc | Behavioral': true }
     });
 
     expect(s1).toBe(s2);
-    expect(s1).not.toBe(sExternal);
     expect(s1).not.toBe(sSplitCollisionTest);
   });
 
@@ -138,15 +129,13 @@ describe('wahsChatSession helpers', () => {
   });
 
   it('filters messages strictly by activeScopeSignature and drops empty/untagged entries', () => {
-    const scopeA = buildPrivacyScopeSignature({
-      sharingPosture: 'patient_self',
+    const scopeA = buildChartScopeSignature({
       includedSources: ['UW Medicine', 'MultiCare Behavioral Health'],
       excludedSources: {}
     });
-    const scopeB = buildPrivacyScopeSignature({
-      sharingPosture: 'external_share',
-      includedSources: ['UW Medicine', 'MultiCare Behavioral Health'],
-      excludedSources: {}
+    const scopeB = buildChartScopeSignature({
+      includedSources: ['UW Medicine'],
+      excludedSources: { 'MultiCare Behavioral Health': true }
     });
 
     const filtered = filterMessagesForScope(
@@ -164,7 +153,7 @@ describe('wahsChatSession helpers', () => {
   });
 });
 
-describe('WAHSChat.svelte privacy scope isolation & async masterPatient history restoration', () => {
+describe('WAHSChat.svelte chart scope isolation & async masterPatient history restoration', () => {
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
@@ -178,12 +167,12 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
     window.localStorage.clear();
   });
 
-  it('isolates conversation history when excluding a source or switching to external_share', async () => {
+  it('isolates conversation history when excluding and re-including a source', async () => {
     const chatRequests: Array<any> = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/chat' && (!init?.method || init.method === 'GET')) {
-        return new Response(JSON.stringify({ data: [{ id: 'wahs-12b-kb' }] }), {
+        return new Response(JSON.stringify({ data: [{ id: 'wahs-12b' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' }
         });
@@ -205,10 +194,7 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
         if (chatRequests.length === 1) {
           return makeSseResponse('Sensitive MultiCare counseling note [1]');
         }
-        if (chatRequests.length === 2) {
-          return makeSseResponse('UW Medicine blood pressure is stable.');
-        }
-        return makeSseResponse('External share summary with SDOH redacted.');
+        return makeSseResponse('UW Medicine blood pressure is stable.');
       }
       return new Response('{}', { status: 404 });
     }) as any;
@@ -243,7 +229,6 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
       "Ask a question about Jordan Rivera's health record..."
     );
 
-    // Turn 1 under patient_self with both sources enabled
     await fireEvent.input(promptInput, {
       target: { value: 'What behavioral health notes do I have?' }
     });
@@ -282,38 +267,15 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
       { role: 'user', content: 'Summarize my remaining clinic records' }
     ]);
 
-    // Re-including MultiCare restores the original patient_self all-sources partition
+    // Re-including MultiCare restores the original all-sources partition
     await fireEvent.click(screen.getByRole('button', { name: /MultiCare Behavioral Health/ }));
     await waitFor(() => {
       expect(screen.getByText(/Sensitive MultiCare counseling note/)).toBeInTheDocument();
-      expect(screen.getByLabelText('Privacy sharing posture')).not.toBeDisabled();
     });
-
-    // Switching posture to external_share resets view to a clean partition and sends zero prior turns
-    const postureSelect = screen.getByLabelText('Privacy sharing posture') as HTMLSelectElement;
-    await fireEvent.change(postureSelect, { target: { value: 'external_share' } });
-
-    await waitFor(() => {
-      expect(screen.queryByText(/Sensitive MultiCare counseling note/)).not.toBeInTheDocument();
-    });
-
-    await fireEvent.input(promptInput, { target: { value: 'Prepare an external summary' } });
-    await fireEvent.click(screen.getByRole('button', { name: /Send/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/External share summary with SDOH redacted\./)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Send/i })).toBeInTheDocument();
-    });
-    expect(chatRequests).toHaveLength(3);
-    expect(chatRequests[2].wahs.sharing_posture).toBe('external_share');
-    expect(chatRequests[2].messages).toEqual([
-      { role: 'user', content: 'Prepare an external summary' }
-    ]);
   });
 
   it('waits for async masterPatient resolution on reload before restoring saved history', async () => {
-    const scopeSig = buildPrivacyScopeSignature({
-      sharingPosture: 'patient_self',
+    const scopeSig = buildChartScopeSignature({
       includedSources: ['UW Medicine'],
       excludedSources: {}
     });
@@ -333,7 +295,7 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
           role: 'assistant',
           content: 'Prior reload answer from saved history',
           timestamp: '09:00 AM',
-          model: 'wahs-12b-kb',
+          model: 'wahs-12b',
           scopeSignature: scopeSig
         }
       ])
@@ -343,7 +305,7 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/chat' && (!init?.method || init.method === 'GET')) {
-        return new Response(JSON.stringify({ data: [{ id: 'wahs-12b-kb' }] }), {
+        return new Response(JSON.stringify({ data: [{ id: 'wahs-12b' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' }
         });
@@ -434,7 +396,7 @@ describe('WAHSChat.svelte privacy scope isolation & async masterPatient history 
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/chat' && (!init?.method || init.method === 'GET')) {
-        return new Response(JSON.stringify({ data: [{ id: 'wahs-26b-kb' }] }), {
+        return new Response(JSON.stringify({ data: [{ id: 'wahs-26b' }] }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' }
         });
