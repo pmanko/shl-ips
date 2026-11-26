@@ -529,7 +529,7 @@ describe('WAHSChat.svelte chart scope isolation & async masterPatient history re
 
     await waitFor(() => {
       expect(screen.getByText(/Grounded answer/)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /\[K1\]/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^\[K1\]$/ })).toBeInTheDocument();
     });
     expect(chatRequests[0].model).toBe('wahs-26b');
     expect(chatRequests[0].wahs.target_budget_tokens).toBe(16384);
