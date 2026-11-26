@@ -93,19 +93,23 @@
 
   const CURATED_MODEL_SET = new Set(CURATED_MODEL_OPTIONS.map((o) => o.id));
 
-  const BUDGET_TAG_MAP: Record<string, number | null> = {
+  type BudgetTag = 'auto' | '2k' | '4k' | '8k' | '16k' | '32k' | '64k';
+
+  const BUDGET_TAG_MAP: Record<BudgetTag, number | null> = {
     auto: null,
+    '2k': 2048,
     '4k': 4096,
     '8k': 8192,
     '16k': 16384,
-    '32k': 32768
+    '32k': 32768,
+    '64k': 65536
   };
 
   let discoveredExtraModels: string[] = [];
 
   let selectedModel = 'wahs-26b';
   let userChangedModel = false;
-  let selectedBudgetTag: 'auto' | '4k' | '8k' | '16k' | '32k' = 'auto';
+  let selectedBudgetTag: BudgetTag = 'auto';
   let activePersona = 'alex';
   let targetBudgetTokens: number | null = null;
   let excludedSources: Record<string, boolean> = {};
@@ -423,7 +427,7 @@
     };
   }
 
-  async function refreshContextPreview(modelOverride?: string, budgetTagOverride?: 'auto' | '4k' | '8k' | '16k' | '32k') {
+  async function refreshContextPreview(modelOverride?: string, budgetTagOverride?: BudgetTag) {
     try {
       const mId = modelOverride ?? selectedModel;
       const bTag = budgetTagOverride ?? selectedBudgetTag;
@@ -459,12 +463,7 @@
   }
 
   async function handleBudgetTagChange(event?: Event) {
-    const raw = ((event?.target as HTMLSelectElement | null)?.value ?? selectedBudgetTag) as
-      | 'auto'
-      | '4k'
-      | '8k'
-      | '16k'
-      | '32k';
+    const raw = ((event?.target as HTMLSelectElement | null)?.value ?? selectedBudgetTag) as BudgetTag;
     selectedBudgetTag = raw in BUDGET_TAG_MAP ? raw : 'auto';
     await refreshContextPreview(selectedModel, selectedBudgetTag);
   }
@@ -928,10 +927,12 @@
           title="Chart condensation token budget"
         >
           <option value="auto">Budget: Auto</option>
+          <option value="2k">Budget: 2k</option>
           <option value="4k">Budget: 4k</option>
           <option value="8k">Budget: 8k</option>
           <option value="16k">Budget: 16k</option>
           <option value="32k">Budget: 32k</option>
+          <option value="64k">Budget: 64k</option>
         </Input>
 
         <Button
