@@ -246,6 +246,7 @@
   let isStreaming = false;
   let errorBanner = '';
   let showTelemetry = true;
+  let showSuggestedQuestions = false;
 
   let componentMounted = false;
   let loadedPartitionKey: string | null = null;
@@ -1302,19 +1303,34 @@
         <p class="text-muted mx-auto mb-3" style="max-width: 580px; font-size: 0.86rem;">
           Responses stream through the WAHS server BFF and cite exact FHIR R4 resources (<Badge color="primary">[1]</Badge>) and draft notes (<Badge color="warning" class="text-dark">[P1]</Badge>). Click any citation pill to inspect its source record and HL7 <code>AI-Provenance</code> metadata.
         </p>
-        <div class="d-flex flex-wrap justify-content-center gap-2 mx-auto" style="max-width: 680px;">
-          {#each starterPrompts as prompt}
-            <button
-              type="button"
-              class="btn btn-outline-primary btn-sm text-start rounded-3 px-3 py-2"
-              style="font-size: 0.82rem; max-width: 320px;"
-              disabled={isStreaming || !isSessionReady}
-              on:click={() => sendQuestion(prompt)}
-            >
-              <Icon name="arrow-up-right-circle" class="me-1" />{prompt}
-            </button>
-          {/each}
+        <div class="mb-2">
+          <button
+            type="button"
+            class="btn btn-outline-secondary btn-sm rounded-pill px-3"
+            style="font-size: 0.78rem;"
+            aria-expanded={showSuggestedQuestions}
+            on:click={() => (showSuggestedQuestions = !showSuggestedQuestions)}
+          >
+            <Icon name="chat-dots" class="me-1" />{showSuggestedQuestions
+              ? 'Hide suggested questions'
+              : 'Show suggested questions'}
+          </button>
         </div>
+        {#if showSuggestedQuestions}
+          <div class="d-flex flex-wrap justify-content-center gap-2 mx-auto" style="max-width: 680px;">
+            {#each starterPrompts as prompt}
+              <button
+                type="button"
+                class="btn btn-outline-primary btn-sm text-start rounded-3 px-3 py-2"
+                style="font-size: 0.82rem; max-width: 320px;"
+                disabled={isStreaming || !isSessionReady}
+                on:click={() => sendQuestion(prompt)}
+              >
+                <Icon name="arrow-up-right-circle" class="me-1" />{prompt}
+              </button>
+            {/each}
+          </div>
+        {/if}
       </div>
     {:else}
       {#each messages as turn (turn.id)}

@@ -524,8 +524,16 @@ describe('WAHSChat.svelte chart scope isolation & async masterPatient history re
     );
 
     // 1. Verify default 3-part selection: wahs-26b + 16k (16384) + Enrichers: 4/5 (Core)
+    // and that suggested questions are hidden until explicitly toggled on
     const enrichBtn = screen.getByRole('button', { name: 'Select enrichment options' });
     expect(enrichBtn).toHaveTextContent('Enrichers: 4/5 (Core)');
+    const suggestToggle = screen.getByRole('button', { name: /Show suggested questions/i });
+    expect(suggestToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/how is my A1C trending/i)).not.toBeInTheDocument();
+    await fireEvent.click(suggestToggle);
+    expect(screen.getByText(/how is my A1C trending/i)).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: /Hide suggested questions/i }));
+    expect(screen.queryByText(/how is my A1C trending/i)).not.toBeInTheDocument();
 
     await fireEvent.input(promptInput, { target: { value: 'Default 3-part check' } });
     await fireEvent.click(screen.getByRole('button', { name: /Send/i }));
