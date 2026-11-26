@@ -16,6 +16,8 @@ export interface WarmWahsContextOptions {
   demoMode?: boolean;
   fetchImpl?: typeof fetch;
   defaultModel?: string;
+  defaultProfile?: string;
+  defaultTargetBudgetTokens?: number | null;
 }
 
 export async function warmWahsContextAfterSignIn(opts: WarmWahsContextOptions): Promise<boolean> {
@@ -61,6 +63,9 @@ export async function warmWahsContextAfterSignIn(opts: WarmWahsContextOptions): 
       body: JSON.stringify({
         model: opts.defaultModel || 'wahs-26b',
         wahs: {
+          profile: opts.defaultProfile || 'core-enriched',
+          target_budget_tokens:
+            opts.defaultTargetBudgetTokens === undefined ? 16384 : opts.defaultTargetBudgetTokens,
           chart_scope: {}
         }
       })

@@ -2,8 +2,74 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import {
   SERVER_LOCAL_DEMO_MODE,
   WAHS_DEFAULT_MODEL,
+  WAHS_DEFAULT_PROFILE,
+  WAHS_DEFAULT_TARGET_BUDGET_TOKENS,
   WAHS_ENGINE_URL
 } from '$lib/server/config';
+
+const SAFE_PROFILE_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const ALLOWED_ENRICHER_IDS = new Set([
+  'temporal',
+  'terminology_kb',
+  'note_rag',
+  'overflow_lookup',
+  'guideline_kb',
+  'core_generalizable',
+  'all_generalizable'
+]);
+
+export const DEFAULT_ENRICHER_CATALOG = [
+  { id: 'temporal', label: 'Temporal Anchor & Lab Trends', short_label: 'Temporal' },
+  { id: 'terminology_kb', label: 'CIEL & Public Standards Terminology KB', short_label: 'CIEL/Standards KB' },
+  { id: 'note_rag', label: 'Tier-2 Unseen-Span Note RAG', short_label: 'Note RAG' },
+  { id: 'overflow_lookup', label: 'Tier-2 Overflow Item Recovery', short_label: 'Overflow' },
+  { id: 'guideline_kb', label: 'Public Clinical Guideline Snippets [K1]', short_label: 'Guidelines [K1]' }
+];
+
+export const DEFAULT_PROFILES_MAP: Record<string, any> = {
+  'core-enriched': {
+    id: 'core-enriched',
+    label: 'WAHS + Core Enrichers (Temporal, Terminology, RAG, Overflow)',
+    enrichers: ['temporal', 'terminology_kb', 'note_rag', 'overflow_lookup'],
+    preferred_chart_tokens: 16384
+  },
+  baseline: {
+    id: 'baseline',
+    label: 'WAHS Verbatim Condensation',
+    enrichers: [],
+    preferred_chart_tokens: null
+  },
+  'full-enriched': {
+    id: 'full-enriched',
+    label: 'WAHS + Core Enrichers + Public Guideline Snippets',
+    enrichers: ['temporal', 'terminology_kb', 'note_rag', 'overflow_lookup', 'guideline_kb'],
+    preferred_chart_tokens: 32768
+  },
+  'rag-overflow': {
+    id: 'rag-overflow',
+    label: 'WAHS + Tier-2 Note RAG & Overflow Recovery',
+    enrichers: ['note_rag', 'overflow_lookup'],
+    preferred_chart_tokens: 16384
+  },
+  terminology: {
+    id: 'terminology',
+    label: 'WAHS + CIEL & Public Standards Terminology KB',
+    enrichers: ['terminology_kb'],
+    preferred_chart_tokens: 32768
+  },
+  temporal: {
+    id: 'temporal',
+    label: 'WAHS + Temporal Anchor & Trends',
+    enrichers: ['temporal'],
+    preferred_chart_tokens: 32768
+  },
+  'temporal-terminology': {
+    id: 'temporal-terminology',
+    label: 'WAHS + Temporal & Terminology KB',
+    enrichers: ['temporal', 'terminology_kb'],
+    preferred_chart_tokens: 32768
+  }
+};
 
 export function resolveEngineV1Base(rawUrl: string = WAHS_ENGINE_URL): string {
   const trimmed = (rawUrl || 'http://wahs-engine:8080/v1').replace(/\/+$/, '');
@@ -28,7 +94,7 @@ export function buildEngineChatPayload(
   allowLocalBundle: boolean = SERVER_LOCAL_DEMO_MODE,
   isPreview: boolean = false
 ): Record<string, any> {
-  const wahsIn = (body?.wahs && typeof body.wahs === 'object') ? body.wahs : {};
+  const wahsIn = body?.wahs && typeof body.wahs === 'object' ? body.wahs : {};
   const rawMessages = Array.isArray(body?.messages) ? body.messages : [];
   const messages =
     rawMessages.length > 0
@@ -41,10 +107,29 @@ export function buildEngineChatPayload(
   const parsedBudget =
     rawBudget !== undefined && rawBudget !== null && rawBudget !== '' ? Number(rawBudget) : null;
 
+  const rawProfile = wahsIn.profile ?? body?.profile;
+  const parsedProfile =
+    typeof rawProfile === 'string' && SAFE_PROFILE_RE.test(rawProfile.trim())
+      ? rawProfile.trim()
+      : null;
+
+  const rawEnrichers = wahsIn.enrichers ?? body?.enrichers;
+  const parsedEnrichers = Array.isArray(rawEnrichers)
+    ? Array.from(
+        new Set(
+          rawEnrichers
+            .map((e: any) => String(e || '').trim())
+            .filter((eid: string) => ALLOWED_ENRICHER_IDS.has(eid))
+        )
+      )
+    : null;
+
   const wahsOptions: Record<string, any> = {
     ...(parsedBudget !== null && Number.isFinite(parsedBudget) && parsedBudget > 0
       ? { target_budget_tokens: Math.trunc(parsedBudget) }
       : {}),
+    ...(parsedProfile !== null ? { profile: parsedProfile } : {}),
+    ...(parsedEnrichers !== null ? { enrichers: parsedEnrichers } : {}),
     chart_scope:
       wahsIn.chart_scope && typeof wahsIn.chart_scope === 'object'
         ? wahsIn.chart_scope
@@ -82,11 +167,12 @@ export const GET: RequestHandler = async ({ request, fetch }) => {
   }
 
   const engineBase = resolveEngineV1Base();
+  const headers = buildEngineHeaders(authHeader);
   try {
-    const upstream = await fetch(`${engineBase}/models`, {
-      method: 'GET',
-      headers: buildEngineHeaders(authHeader)
-    });
+    const [upstream, profilesResp] = await Promise.all([
+      fetch(`${engineBase}/models`, { method: 'GET', headers }),
+      fetch(`${engineBase}/wahs/profiles`, { method: 'GET', headers }).catch(() => null)
+    ]);
     if (!upstream.ok) {
       const detail = await upstream.text().catch(() => upstream.statusText);
       return json(
@@ -95,15 +181,43 @@ export const GET: RequestHandler = async ({ request, fetch }) => {
       );
     }
     const payload = await upstream.json();
+    const profilesPayload =
+      profilesResp && profilesResp.ok
+        ? await profilesResp.json().catch(() => null)
+        : null;
+    const hasEngineProfiles =
+      profilesPayload &&
+      typeof profilesPayload === 'object' &&
+      profilesPayload.profiles &&
+      typeof profilesPayload.profiles === 'object';
+
     return json({
       ...payload,
-      default_model: payload?.default_model || WAHS_DEFAULT_MODEL
+      default_model:
+        payload?.default_model ||
+        (hasEngineProfiles ? profilesPayload.default_model : null) ||
+        WAHS_DEFAULT_MODEL,
+      default_profile:
+        (hasEngineProfiles ? profilesPayload.default_profile : null) || WAHS_DEFAULT_PROFILE,
+      default_target_budget_tokens:
+        hasEngineProfiles && typeof profilesPayload.default_target_budget_tokens === 'number'
+          ? profilesPayload.default_target_budget_tokens
+          : WAHS_DEFAULT_TARGET_BUDGET_TOKENS,
+      available_enrichers:
+        hasEngineProfiles && Array.isArray(profilesPayload.available_enrichers)
+          ? profilesPayload.available_enrichers
+          : DEFAULT_ENRICHER_CATALOG,
+      profiles: hasEngineProfiles ? profilesPayload.profiles : DEFAULT_PROFILES_MAP
     });
   } catch (err: any) {
     return json(
       {
         object: 'list',
         default_model: WAHS_DEFAULT_MODEL,
+        default_profile: WAHS_DEFAULT_PROFILE,
+        default_target_budget_tokens: WAHS_DEFAULT_TARGET_BUDGET_TOKENS,
+        available_enrichers: DEFAULT_ENRICHER_CATALOG,
+        profiles: DEFAULT_PROFILES_MAP,
         data: [
           { id: 'wahs-26b', object: 'model' },
           { id: 'wahs-12b', object: 'model' },

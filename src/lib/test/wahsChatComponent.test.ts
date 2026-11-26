@@ -467,4 +467,104 @@ describe('WAHSChat.svelte chart scope isolation & async masterPatient history re
     expect(authSpy.renewToken).toHaveBeenCalledTimes(1);
     expect(authHeadersSeen).toEqual(['Bearer expired-token-1', 'Bearer fresh-token-2']);
   });
+
+  it('defaults 3-part choice to wahs-26b + 16k + core-enriched and updates model, context size, and enrichment toggles', async () => {
+    const chatRequests: Array<any> = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/chat' && (!init?.method || init.method === 'GET')) {
+        return new Response(
+          JSON.stringify({
+            default_model: 'wahs-26b',
+            default_profile: 'core-enriched',
+            default_target_budget_tokens: 16384,
+            data: [{ id: 'wahs-26b' }, { id: 'wahs-12b' }, { id: 'wahs-e4b' }]
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.startsWith('/api/chat?mode=preview')) {
+        return new Response(
+          JSON.stringify({
+            prefix_cache_key_hash: 'preview-hash-3part',
+            x_wahs: {
+              condensation: { tier: 1, tier_name: 'Focused', actual_tokens: 420, budget_effective: 16384 }
+            }
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url === '/api/chat' && init?.method === 'POST') {
+        chatRequests.push(JSON.parse(String(init.body || '{}')));
+        return makeSseResponse('Grounded answer [1] with guideline [K1].');
+      }
+      return new Response('{}', { status: 404 });
+    }) as any;
+
+    const fhirDataService = new FHIRDataService(fakeAuth());
+    fhirDataService.setMasterPatient({
+      resourceType: 'Patient',
+      id: 'pat-3part-1',
+      name: [{ given: ['Casey'], family: 'Morgan' }]
+    } as any);
+    fhirDataService.addDatasetToUserResources(
+      makeSourceCollection({
+        patientId: 'ds-uw-3p',
+        sourceName: 'UW Medicine',
+        sourceUri: 'uw-medicine',
+        observationText: 'Hemoglobin A1c'
+      })
+    );
+    fhirDataService.loading.set(false);
+
+    render(WAHSChat, { context: buildContext(fhirDataService) });
+
+    const promptInput = await screen.findByPlaceholderText(
+      "Ask a question about Casey Morgan's health record..."
+    );
+
+    // 1. Verify default 3-part selection: wahs-26b + 16k (16384) + core-enriched
+    await fireEvent.input(promptInput, { target: { value: 'Default 3-part check' } });
+    await fireEvent.click(screen.getByRole('button', { name: /Send/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Grounded answer/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /\[K1\]/ })).toBeInTheDocument();
+    });
+    expect(chatRequests[0].model).toBe('wahs-26b');
+    expect(chatRequests[0].wahs.target_budget_tokens).toBe(16384);
+    expect(chatRequests[0].wahs.profile).toBe('core-enriched');
+    expect(chatRequests[0].wahs.enrichers).toEqual([
+      'temporal',
+      'terminology_kb',
+      'note_rag',
+      'overflow_lookup'
+    ]);
+
+    // 2. Change all 3 parts: 12b + 32k + toggle Guidelines [K1] on (-> full-enriched)
+    await fireEvent.change(screen.getByLabelText('Select clinical LLM'), {
+      target: { value: 'wahs-12b' }
+    });
+    await fireEvent.change(screen.getByLabelText('Select chart token budget'), {
+      target: { value: '32k' }
+    });
+    await fireEvent.click(screen.getByRole('button', { name: /Guidelines \[K1\]/ }));
+
+    await fireEvent.input(promptInput, { target: { value: 'Updated 3-part check' } });
+    await fireEvent.click(screen.getByRole('button', { name: /Send/i }));
+
+    await waitFor(() => {
+      expect(chatRequests).toHaveLength(2);
+    });
+    expect(chatRequests[1].model).toBe('wahs-12b');
+    expect(chatRequests[1].wahs.target_budget_tokens).toBe(32768);
+    expect(chatRequests[1].wahs.profile).toBe('full-enriched');
+    expect(chatRequests[1].wahs.enrichers).toEqual([
+      'temporal',
+      'terminology_kb',
+      'note_rag',
+      'overflow_lookup',
+      'guideline_kb'
+    ]);
+  });
 });

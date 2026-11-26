@@ -19,13 +19,20 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     expect(resolveEngineV1Base('http://127.0.0.1:8095/')).toBe('http://127.0.0.1:8095/v1');
   });
 
-  it('strips browser-supplied fhir_bundle and omits legacy flags when building payload', () => {
+  it('strips browser-supplied fhir_bundle and omits legacy flags while forwarding profile and generalizable enrichers', () => {
     const payload = buildEngineChatPayload(
       {
         model: 'wahs-12b',
         messages: [{ role: 'user', content: 'Check my medications' }],
         wahs: {
-          target_budget_tokens: 2400,
+          target_budget_tokens: 16384,
+          profile: 'core-enriched',
+          enrichers: [
+            'temporal',
+            'terminology_kb',
+            'experimental.clinical_reconciliation',
+            'bogus'
+          ],
           sharing_posture: 'external_share',
           retrieval_strategy: 'note_rag',
           enable_kb: true,
@@ -39,7 +46,9 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     );
 
     expect(payload.model).toBe('wahs-12b');
-    expect(payload.wahs.target_budget_tokens).toBe(2400);
+    expect(payload.wahs.target_budget_tokens).toBe(16384);
+    expect(payload.wahs.profile).toBe('core-enriched');
+    expect(payload.wahs.enrichers).toEqual(['temporal', 'terminology_kb']);
     expect(payload.wahs.sharing_posture).toBeUndefined();
     expect(payload.wahs.retrieval_strategy).toBeUndefined();
     expect(payload.wahs.enable_kb).toBeUndefined();
@@ -48,6 +57,18 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     });
     expect(payload.wahs.overlay_resources).toHaveLength(1);
     expect(payload.wahs.fhir_bundle).toBeUndefined();
+
+    const baselineOverridePayload = buildEngineChatPayload(
+      {
+        model: 'wahs-26b',
+        messages: [{ role: 'user', content: 'Verbatim check' }],
+        wahs: { profile: 'baseline', enrichers: [] }
+      },
+      false,
+      false
+    );
+    expect(baselineOverridePayload.wahs.profile).toBe('baseline');
+    expect(baselineOverridePayload.wahs.enrichers).toEqual([]);
 
     const defaultPayload = buildEngineChatPayload(
       {
@@ -58,6 +79,8 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
       false
     );
     expect(defaultPayload.wahs.target_budget_tokens).toBeUndefined();
+    expect(defaultPayload.wahs.profile).toBeUndefined();
+    expect(defaultPayload.wahs.enrichers).toBeUndefined();
 
     for (const invalidBudget of [0, -50, Number.NaN, null, '']) {
       const invalidPayload = buildEngineChatPayload(
@@ -186,13 +209,24 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     expect(streamedText).toContain('AI-Provenance');
   });
 
-  it('proxies GET /api/chat to wahs-engine /v1/models and defaults to wahs-26b', async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ object: 'list', data: [{ id: 'wahs-12b' }] }), {
+  it('proxies GET /api/chat to wahs-engine /v1/models + /v1/wahs/profiles and defaults to wahs-26b + 16k + core-enriched', async () => {
+    const mockFetch = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/wahs/profiles')) {
+        return new Response(
+          JSON.stringify({
+            default_model: 'wahs-26b',
+            default_profile: 'core-enriched',
+            default_target_budget_tokens: 16384,
+            profiles: { 'core-enriched': { id: 'core-enriched', enrichers: ['temporal', 'terminology_kb', 'note_rag', 'overflow_lookup'] } }
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({ object: 'list', data: [{ id: 'wahs-12b' }] }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
-      })
-    );
+      });
+    });
     const req = new Request('http://localhost:4000/api/chat', {
       method: 'GET',
       headers: { Authorization: 'Bearer real-jwt-token' }
@@ -202,6 +236,8 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     const body = await res.json();
     expect(body.data[0].id).toBe('wahs-12b');
     expect(body.default_model).toBe('wahs-26b');
+    expect(body.default_profile).toBe('core-enriched');
+    expect(body.default_target_budget_tokens).toBe(16384);
 
     const implicitModelPayload = buildEngineChatPayload(
       {
@@ -269,7 +305,11 @@ describe('WAHS SvelteKit BFF /api/chat (+server.ts)', () => {
     expect(calls[0].url).toBe('/api/chat?mode=preview');
     expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
       model: 'wahs-26b',
-      wahs: { chart_scope: {} }
+      wahs: {
+        profile: 'core-enriched',
+        target_budget_tokens: 16384,
+        chart_scope: {}
+      }
     });
 
     expect(
