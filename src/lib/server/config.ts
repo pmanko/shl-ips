@@ -14,6 +14,17 @@ export const WAHS_ENGINE_URL =
 export const WAHS_DEFAULT_MODEL =
   (process.env.WAHS_DEFAULT_MODEL || 'wahs-26b').trim() || 'wahs-26b';
 
+export const WAHS_DEFAULT_PROFILE =
+  (process.env.WAHS_DEFAULT_PROFILE || 'core-enriched').trim() || 'core-enriched';
+
+const rawDefaultTargetBudget = Number(
+  process.env.WAHS_DEFAULT_TARGET_BUDGET_TOKENS || '16384'
+);
+export const WAHS_DEFAULT_TARGET_BUDGET_TOKENS =
+  Number.isFinite(rawDefaultTargetBudget) && rawDefaultTargetBudget > 0
+    ? Math.trunc(rawDefaultTargetBudget)
+    : 16384;
+
 export const SERVER_LOCAL_DEMO_MODE = Boolean(
   process.env.SERVER_LOCAL_DEMO_MODE === '1' ||
   process.env.SERVER_LOCAL_DEMO_MODE === 'true' ||

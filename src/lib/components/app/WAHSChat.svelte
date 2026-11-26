@@ -86,14 +86,14 @@
   }
 
   const CURATED_MODEL_OPTIONS: ModelOption[] = [
-    { id: 'wahs-26b', label: 'WAHS · Gemma 4 26B (Default)' },
-    { id: 'wahs-12b', label: 'WAHS · Gemma 4 12B' },
-    { id: 'wahs-e4b', label: 'WAHS · Gemma 4 E4B (Compact)' }
+    { id: 'wahs-26b', label: 'Model: Gemma 4 26B (Default)' },
+    { id: 'wahs-12b', label: 'Model: Gemma 4 12B' },
+    { id: 'wahs-e4b', label: 'Model: Gemma 4 E4B (Compact)' }
   ];
 
   const CURATED_MODEL_SET = new Set(CURATED_MODEL_OPTIONS.map((o) => o.id));
 
-  type BudgetTag = 'auto' | '2k' | '4k' | '8k' | '16k' | '32k' | '64k';
+  type BudgetTag = 'auto' | '2k' | '4k' | '8k' | '16k' | '32k' | '64k' | '128k';
 
   const BUDGET_TAG_MAP: Record<BudgetTag, number | null> = {
     auto: null,
@@ -102,14 +102,114 @@
     '8k': 8192,
     '16k': 16384,
     '32k': 32768,
-    '64k': 65536
+    '64k': 65536,
+    '128k': 131072
   };
+
+  function tokensToBudgetTag(tokens: unknown): BudgetTag | null {
+    const n = Number(tokens);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    for (const [tag, val] of Object.entries(BUDGET_TAG_MAP) as Array<[BudgetTag, number | null]>) {
+      if (val === n) return tag;
+    }
+    return null;
+  }
+
+  interface EnricherModuleOption {
+    id: string;
+    shortLabel: string;
+    description: string;
+  }
+
+  const ENRICHER_MODULE_OPTIONS: EnricherModuleOption[] = [
+    { id: 'temporal', shortLabel: 'Temporal', description: 'Chart anchor date, recency cutoffs & UCUM lab trends' },
+    { id: 'terminology_kb', shortLabel: 'CIEL/Standards KB', description: 'Offline CIEL v2026-04-28 + RxNorm/ATC/CVX/LOINC lookup' },
+    { id: 'note_rag', shortLabel: 'Note RAG', description: 'Tier-2 unseen clinical note span BM25 retrieval' },
+    { id: 'overflow_lookup', shortLabel: 'Overflow', description: 'Tier-2 omitted clinical item BM25 recovery' },
+    { id: 'guideline_kb', shortLabel: 'Guidelines [K1]', description: 'Toggleable public clinical guideline snippets ([K1]..[KM])' }
+  ];
+
+  interface ProfilePresetOption {
+    id: string;
+    label: string;
+    shortLabel: string;
+    enrichers: string[];
+  }
+
+  const PROFILE_PRESET_OPTIONS: ProfilePresetOption[] = [
+    {
+      id: 'core-enriched',
+      label: 'Enrich: Core Enrichers (Default)',
+      shortLabel: 'Core Enrichers',
+      enrichers: ['temporal', 'terminology_kb', 'note_rag', 'overflow_lookup']
+    },
+    {
+      id: 'baseline',
+      label: 'Enrich: None (Verbatim Only)',
+      shortLabel: 'Verbatim Only',
+      enrichers: []
+    },
+    {
+      id: 'full-enriched',
+      label: 'Enrich: Core + Guidelines [K1]',
+      shortLabel: 'Core + Guidelines',
+      enrichers: ['temporal', 'terminology_kb', 'note_rag', 'overflow_lookup', 'guideline_kb']
+    },
+    {
+      id: 'rag-overflow',
+      label: 'Enrich: Note RAG + Overflow',
+      shortLabel: 'RAG + Overflow',
+      enrichers: ['note_rag', 'overflow_lookup']
+    },
+    {
+      id: 'terminology',
+      label: 'Enrich: CIEL & Standards KB',
+      shortLabel: 'Terminology KB',
+      enrichers: ['terminology_kb']
+    },
+    {
+      id: 'temporal',
+      label: 'Enrich: Temporal & Trends',
+      shortLabel: 'Temporal',
+      enrichers: ['temporal']
+    },
+    {
+      id: 'temporal-terminology',
+      label: 'Enrich: Temporal + Terminology',
+      shortLabel: 'Temporal + Term',
+      enrichers: ['temporal', 'terminology_kb']
+    }
+  ];
+
+  const PROFILE_PRESET_MAP: Record<string, ProfilePresetOption> = Object.fromEntries(
+    PROFILE_PRESET_OPTIONS.map((p) => [p.id, p])
+  );
+
+  function canonicalizeEnrichers(ids: Iterable<string>): string[] {
+    const active = new Set(Array.from(ids).map((s) => String(s || '').trim()).filter(Boolean));
+    return ENRICHER_MODULE_OPTIONS.map((m) => m.id).filter((id) => active.has(id));
+  }
+
+  function matchProfileForEnrichers(ids: Iterable<string>): string {
+    const canon = canonicalizeEnrichers(ids);
+    const key = canon.join(',');
+    for (const preset of PROFILE_PRESET_OPTIONS) {
+      if (canonicalizeEnrichers(preset.enrichers).join(',') === key) {
+        return preset.id;
+      }
+    }
+    return 'custom';
+  }
 
   let discoveredExtraModels: string[] = [];
 
   let selectedModel = 'wahs-26b';
   let userChangedModel = false;
-  let selectedBudgetTag: BudgetTag = 'auto';
+  let selectedBudgetTag: BudgetTag = '16k';
+  let userChangedBudget = false;
+  let selectedProfile = 'core-enriched';
+  let selectedEnrichers: string[] = [...PROFILE_PRESET_MAP['core-enriched'].enrichers];
+  let userChangedEnrichment = false;
   let activePersona = 'alex';
   let targetBudgetTokens: number | null = null;
   let excludedSources: Record<string, boolean> = {};
@@ -119,7 +219,7 @@
     ? (latestXWahs.enrichers as Array<{ enricher_id?: string }>)
         .map((e) => String(e?.enricher_id || '').trim())
         .filter(Boolean)
-    : [];
+    : selectedEnrichers;
 
   let inputPrompt = '';
   let isStreaming = false;
@@ -396,14 +496,31 @@
       const resp = await fetch('/api/chat', { method: 'GET', headers });
       if (!resp.ok) return;
       const body = await resp.json();
+      let changed = false;
       if (typeof body?.default_model === 'string' && body.default_model.trim() && !userChangedModel) {
         const nextDefault = body.default_model.trim();
         if (nextDefault !== selectedModel) {
           selectedModel = nextDefault;
-          if (loadedPartitionKey !== null) {
-            await refreshContextPreview(nextDefault, selectedBudgetTag);
-          }
+          changed = true;
         }
+      }
+      if (typeof body?.default_profile === 'string' && body.default_profile.trim() && !userChangedEnrichment) {
+        const nextProf = body.default_profile.trim();
+        if (PROFILE_PRESET_MAP[nextProf] && nextProf !== selectedProfile) {
+          selectedProfile = nextProf;
+          selectedEnrichers = [...PROFILE_PRESET_MAP[nextProf].enrichers];
+          changed = true;
+        }
+      }
+      if (body?.default_target_budget_tokens != null && !userChangedBudget) {
+        const mappedTag = tokensToBudgetTag(body.default_target_budget_tokens);
+        if (mappedTag && mappedTag !== selectedBudgetTag) {
+          selectedBudgetTag = mappedTag;
+          changed = true;
+        }
+      }
+      if (changed && loadedPartitionKey !== null) {
+        await refreshContextPreview();
       }
       if (Array.isArray(body?.data) && body.data.length > 0) {
         discoveredExtraModels = body.data
@@ -418,24 +535,36 @@
   function buildWahsOptionsPayload(
     fhirBundle: Record<string, any> | undefined,
     extraScope: Record<string, any>,
-    budgetVal: number | null = effectiveBudgetOverride
+    budgetVal: number | null = effectiveBudgetOverride,
+    profileVal: string = selectedProfile,
+    enrichersVal: string[] = selectedEnrichers
   ): Record<string, any> {
+    const effectiveProfile = profileVal === 'custom' ? 'baseline' : profileVal;
     return {
       ...(budgetVal != null ? { target_budget_tokens: budgetVal } : {}),
+      profile: effectiveProfile,
+      enrichers: canonicalizeEnrichers(enrichersVal),
       chart_scope: extraScope,
       ...(fhirBundle ? { fhir_bundle: fhirBundle } : {})
     };
   }
 
-  async function refreshContextPreview(modelOverride?: string, budgetTagOverride?: BudgetTag) {
+  async function refreshContextPreview(
+    modelOverride?: string,
+    budgetTagOverride?: BudgetTag,
+    profileOverride?: string,
+    enrichersOverride?: string[]
+  ) {
     try {
       const mId = modelOverride ?? selectedModel;
       const bTag = budgetTagOverride ?? selectedBudgetTag;
       const bVal = targetBudgetTokens ?? BUDGET_TAG_MAP[bTag] ?? null;
+      const pId = profileOverride ?? selectedProfile;
+      const eIds = enrichersOverride ?? selectedEnrichers;
       const fhirBundle = assembleLocalDemoBundleIfNeeded();
       const bodyStr = JSON.stringify({
         model: mId,
-        wahs: buildWahsOptionsPayload(fhirBundle, buildChartScopePayload(), bVal)
+        wahs: buildWahsOptionsPayload(fhirBundle, buildChartScopePayload(), bVal, pId, eIds)
       });
       const resp = await fetchChatWithAuthRetry('/api/chat?mode=preview', (headers) => ({
         method: 'POST',
@@ -459,13 +588,42 @@
     userChangedModel = true;
     const nextModel = (event?.target as HTMLSelectElement | null)?.value ?? selectedModel;
     selectedModel = nextModel;
-    await refreshContextPreview(nextModel, selectedBudgetTag);
+    await refreshContextPreview(nextModel, selectedBudgetTag, selectedProfile, selectedEnrichers);
   }
 
   async function handleBudgetTagChange(event?: Event) {
+    userChangedBudget = true;
     const raw = ((event?.target as HTMLSelectElement | null)?.value ?? selectedBudgetTag) as BudgetTag;
-    selectedBudgetTag = raw in BUDGET_TAG_MAP ? raw : 'auto';
-    await refreshContextPreview(selectedModel, selectedBudgetTag);
+    selectedBudgetTag = raw in BUDGET_TAG_MAP ? raw : '16k';
+    await refreshContextPreview(selectedModel, selectedBudgetTag, selectedProfile, selectedEnrichers);
+  }
+
+  async function handleProfileChange(event?: Event) {
+    userChangedEnrichment = true;
+    const nextProf = (event?.target as HTMLSelectElement | null)?.value ?? selectedProfile;
+    if (PROFILE_PRESET_MAP[nextProf]) {
+      selectedProfile = nextProf;
+      selectedEnrichers = [...PROFILE_PRESET_MAP[nextProf].enrichers];
+    } else {
+      selectedProfile = 'custom';
+    }
+    await refreshContextPreview(selectedModel, selectedBudgetTag, selectedProfile, selectedEnrichers);
+  }
+
+  async function toggleEnricherModule(enricherId: string) {
+    if (isStreaming) return;
+    userChangedEnrichment = true;
+    const current = new Set(selectedEnrichers);
+    if (current.has(enricherId)) {
+      current.delete(enricherId);
+    } else {
+      current.add(enricherId);
+    }
+    const nextEnrichers = canonicalizeEnrichers(current);
+    const nextProfile = matchProfileForEnrichers(nextEnrichers);
+    selectedEnrichers = nextEnrichers;
+    selectedProfile = nextProfile;
+    await refreshContextPreview(selectedModel, selectedBudgetTag, nextProfile, nextEnrichers);
   }
 
   async function toggleSourceScope(sourceName: string) {
@@ -718,11 +876,12 @@
     type: 'text' | 'cite';
     value: string;
     isPatient?: boolean;
+    isKnowledge?: boolean;
   }
 
   function tokenizeCitations(text: string): TokenPart[] {
     if (!text) return [];
-    const regex = /\[(P?\d+)\]/g;
+    const regex = /\[([PK]?\d+)\]/g;
     const parts: TokenPart[] = [];
     let lastIdx = 0;
     let match: RegExpExecArray | null;
@@ -734,7 +893,8 @@
       parts.push({
         type: 'cite',
         value: key,
-        isPatient: key.startsWith('P')
+        isPatient: key.startsWith('P'),
+        isKnowledge: key.startsWith('K')
       });
       lastIdx = regex.lastIndex;
     }
@@ -865,7 +1025,7 @@
 <Card class="mb-3 shadow-sm border-0" style="background: #f8fafc;">
   <CardBody class="py-2 px-3">
     <Row class="align-items-center g-2">
-      <Col lg="7" class="d-flex align-items-center flex-wrap gap-2">
+      <Col lg="6" class="d-flex align-items-center flex-wrap gap-2">
         <span class="fw-bold text-secondary" style="font-size: 0.8rem;">
           <Icon name="sliders" class="text-primary me-1" />
           Chart Scope ({activeIncludedSources.length}/{pooledSources.length} sources · {totalPooledResources} items):
@@ -894,15 +1054,16 @@
         {/if}
       </Col>
 
-      <Col lg="5" class="d-flex justify-content-lg-end align-items-center gap-2 flex-wrap">
+      <Col lg="6" class="d-flex justify-content-lg-end align-items-center gap-2 flex-wrap">
         <Input
           type="select"
           bsSize="sm"
           bind:value={selectedModel}
           disabled={isStreaming}
           on:change={handleModelChange}
-          style="width: auto; max-width: 250px; font-size: 0.78rem;"
+          style="width: auto; max-width: 230px; font-size: 0.78rem;"
           aria-label="Select clinical LLM"
+          title="1. Core clinical LLM"
         >
           {#each CURATED_MODEL_OPTIONS as opt}
             <option value={opt.id}>{opt.label}</option>
@@ -910,7 +1071,7 @@
           {#if discoveredExtraModels.length > 0}
             <optgroup label="Discovered Engine Models">
               {#each discoveredExtraModels as extraId}
-                <option value={extraId}>WAHS Engine · {extraId}</option>
+                <option value={extraId}>Model: {extraId}</option>
               {/each}
             </optgroup>
           {/if}
@@ -924,15 +1085,34 @@
           on:change={handleBudgetTagChange}
           style="width: auto; font-size: 0.78rem;"
           aria-label="Select chart token budget"
-          title="Chart condensation token budget"
+          title="2. Target condensed chart context size"
         >
-          <option value="auto">Budget: Auto</option>
-          <option value="2k">Budget: 2k</option>
-          <option value="4k">Budget: 4k</option>
-          <option value="8k">Budget: 8k</option>
-          <option value="16k">Budget: 16k</option>
-          <option value="32k">Budget: 32k</option>
-          <option value="64k">Budget: 64k</option>
+          <option value="2k">Context: 2k</option>
+          <option value="4k">Context: 4k</option>
+          <option value="8k">Context: 8k</option>
+          <option value="16k">Context: 16k (Default)</option>
+          <option value="32k">Context: 32k</option>
+          <option value="64k">Context: 64k</option>
+          <option value="128k">Context: 128k</option>
+          <option value="auto">Context: Auto</option>
+        </Input>
+
+        <Input
+          type="select"
+          bsSize="sm"
+          bind:value={selectedProfile}
+          disabled={isStreaming}
+          on:change={handleProfileChange}
+          style="width: auto; max-width: 240px; font-size: 0.78rem;"
+          aria-label="Select enrichment options"
+          title="3. Modular clinical enrichment profile"
+        >
+          {#each PROFILE_PRESET_OPTIONS as preset}
+            <option value={preset.id}>{preset.label}</option>
+          {/each}
+          {#if selectedProfile === 'custom'}
+            <option value="custom">Enrich: Custom ({selectedEnrichers.length} modules)</option>
+          {/if}
         </Input>
 
         <Button
@@ -963,6 +1143,24 @@
         </Button>
       </Col>
     </Row>
+
+    <div class="mt-2 pt-2 border-top d-flex flex-wrap align-items-center gap-2" style="font-size: 0.75rem;">
+      <span class="fw-semibold text-secondary">Enrichment Modules:</span>
+      {#each ENRICHER_MODULE_OPTIONS as mod}
+        {@const modActive = selectedEnrichers.includes(mod.id)}
+        <button
+          type="button"
+          class="btn btn-sm rounded-pill py-0 px-2"
+          aria-pressed={modActive}
+          disabled={isStreaming}
+          title={mod.description}
+          style="font-size: 0.73rem; font-weight: 600; border: 1px solid {modActive ? '#0284c7' : '#cbd5e1'}; background-color: {modActive ? '#e0f2fe' : '#ffffff'}; color: {modActive ? '#0369a1' : '#64748b'};"
+          on:click={() => toggleEnricherModule(mod.id)}
+        >
+          {modActive ? '✓ ' : '+ '}{mod.shortLabel}
+        </button>
+      {/each}
+    </div>
 
     {#if showTelemetry && latestXWahs?.condensation}
       <div class="mt-2 pt-2 border-top d-flex flex-wrap align-items-center gap-3" style="font-size: 0.75rem; color: #475569;">
@@ -1072,7 +1270,9 @@
                       class="btn btn-sm py-0 px-1 mx-1 align-baseline fw-bold"
                       style="font-size: 0.74rem; line-height: 1.3; border-radius: 6px; {part.isPatient
                         ? 'background: #fef3c7; color: #92400e; border: 1px solid #f59e0b;'
-                        : 'background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd;'}"
+                        : part.isKnowledge
+                          ? 'background: #dcfce7; color: #166534; border: 1px solid #22c55e;'
+                          : 'background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd;'}"
                       title={citeEntry
                         ? `[${part.value}] ${citeEntry.source || ''} · ${citeEntry.resourceType || ''} - ${citeEntry.display || 'Click to inspect FHIR resource'}`
                         : `Click to inspect citation [${part.value}]`}
