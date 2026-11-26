@@ -791,6 +791,13 @@
           if (dataStr === '[DONE]') break;
           try {
             const parsed = JSON.parse(dataStr);
+            if (parsed.error) {
+              const errMsg =
+                typeof parsed.error === 'string'
+                  ? parsed.error
+                  : parsed.error.message || 'Upstream LLM stream error';
+              throw new Error(errMsg);
+            }
             const xws = parsed.x_wahs_stream;
             if (xws) {
               if (xws.citation_map) {
@@ -822,7 +829,10 @@
                 await scrollToBottom();
               }
             }
-          } catch {
+          } catch (parseErr) {
+            if (parseErr && !(parseErr instanceof SyntaxError)) {
+              throw parseErr;
+            }
             // ignore partial SSE JSON fragment
           }
         }
