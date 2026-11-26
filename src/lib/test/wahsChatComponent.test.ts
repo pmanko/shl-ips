@@ -523,7 +523,10 @@ describe('WAHSChat.svelte chart scope isolation & async masterPatient history re
       "Ask a question about Casey Morgan's health record..."
     );
 
-    // 1. Verify default 3-part selection: wahs-26b + 16k (16384) + core-enriched
+    // 1. Verify default 3-part selection: wahs-26b + 16k (16384) + Enrichers: 4/5 (Core)
+    const enrichBtn = screen.getByRole('button', { name: 'Select enrichment options' });
+    expect(enrichBtn).toHaveTextContent('Enrichers: 4/5 (Core)');
+
     await fireEvent.input(promptInput, { target: { value: 'Default 3-part check' } });
     await fireEvent.click(screen.getByRole('button', { name: /Send/i }));
 
@@ -541,20 +544,27 @@ describe('WAHSChat.svelte chart scope isolation & async masterPatient history re
       'overflow_lookup'
     ]);
 
-    // 2. Change all 3 parts: 12b + 32k + toggle Guidelines [K1] on (-> full-enriched)
+    // 2. Open multi-select checkbox menu, check Public Guideline Snippets [K1] (-> 5/5 All / full-enriched)
     await fireEvent.change(screen.getByLabelText('Select clinical LLM'), {
       target: { value: 'wahs-12b' }
     });
     await fireEvent.change(screen.getByLabelText('Select chart token budget'), {
       target: { value: '32k' }
     });
-    await fireEvent.click(screen.getByRole('button', { name: /Guidelines \[K1\]/ }));
+    await fireEvent.click(enrichBtn);
+    const guidelineCheckbox = screen.getByRole('checkbox', {
+      name: /Public Guideline Snippets \[K1\]/i
+    });
+    expect(guidelineCheckbox).not.toBeChecked();
+    await fireEvent.click(guidelineCheckbox);
+    expect(enrichBtn).toHaveTextContent('Enrichers: 5/5 (All)');
 
     await fireEvent.input(promptInput, { target: { value: 'Updated 3-part check' } });
     await fireEvent.click(screen.getByRole('button', { name: /Send/i }));
 
     await waitFor(() => {
       expect(chatRequests).toHaveLength(2);
+      expect(enrichBtn).not.toBeDisabled();
     });
     expect(chatRequests[1].model).toBe('wahs-12b');
     expect(chatRequests[1].wahs.target_budget_tokens).toBe(32768);
@@ -566,5 +576,21 @@ describe('WAHSChat.svelte chart scope isolation & async masterPatient history re
       'overflow_lookup',
       'guideline_kb'
     ]);
+
+    // 3. Use Clear shortcut inside the checkbox menu (-> 0/5 None / baseline + enrichers: [])
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(enrichBtn).toHaveTextContent('Enrichers: 0/5 (None)');
+    await fireEvent.keyDown(window, { key: 'Escape' });
+    expect(enrichBtn).toHaveAttribute('aria-expanded', 'false');
+
+    await fireEvent.input(promptInput, { target: { value: 'Baseline verbatim check' } });
+    await fireEvent.click(screen.getByRole('button', { name: /Send/i }));
+
+    await waitFor(() => {
+      expect(chatRequests).toHaveLength(3);
+      expect(enrichBtn).not.toBeDisabled();
+    });
+    expect(chatRequests[2].wahs.profile).toBe('baseline');
+    expect(chatRequests[2].wahs.enrichers).toEqual([]);
   });
 });

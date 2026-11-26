@@ -117,66 +117,84 @@
 
   interface EnricherModuleOption {
     id: string;
+    label: string;
     shortLabel: string;
     description: string;
   }
 
   const ENRICHER_MODULE_OPTIONS: EnricherModuleOption[] = [
-    { id: 'temporal', shortLabel: 'Temporal', description: 'Chart anchor date, recency cutoffs & UCUM lab trends' },
-    { id: 'terminology_kb', shortLabel: 'CIEL/Standards KB', description: 'Offline CIEL v2026-04-28 + RxNorm/ATC/CVX/LOINC lookup' },
-    { id: 'note_rag', shortLabel: 'Note RAG', description: 'Tier-2 unseen clinical note span BM25 retrieval' },
-    { id: 'overflow_lookup', shortLabel: 'Overflow', description: 'Tier-2 omitted clinical item BM25 recovery' },
-    { id: 'guideline_kb', shortLabel: 'Guidelines [K1]', description: 'Toggleable public clinical guideline snippets ([K1]..[KM])' }
+    {
+      id: 'temporal',
+      label: 'Temporal Anchor & Lab Trends',
+      shortLabel: 'Temporal',
+      description: 'Chart anchor date, recency cutoffs & UCUM lab trends'
+    },
+    {
+      id: 'terminology_kb',
+      label: 'CIEL & Standards Terminology KB',
+      shortLabel: 'CIEL/Standards KB',
+      description: 'Offline CIEL v2026-04-28 + RxNorm/ATC/CVX/LOINC lookup'
+    },
+    {
+      id: 'note_rag',
+      label: 'Unseen-Span Note RAG',
+      shortLabel: 'Note RAG',
+      description: 'Tier-2 unseen clinical note span BM25 retrieval'
+    },
+    {
+      id: 'overflow_lookup',
+      label: 'Overflow Item Recovery',
+      shortLabel: 'Overflow',
+      description: 'Tier-2 omitted clinical item BM25 recovery'
+    },
+    {
+      id: 'guideline_kb',
+      label: 'Public Guideline Snippets [K1]',
+      shortLabel: 'Guidelines [K1]',
+      description: 'Toggleable public clinical guideline snippets ([K1]..[KM])'
+    }
   ];
 
   interface ProfilePresetOption {
     id: string;
-    label: string;
-    shortLabel: string;
+    tag: string;
     enrichers: string[];
   }
 
   const PROFILE_PRESET_OPTIONS: ProfilePresetOption[] = [
     {
       id: 'core-enriched',
-      label: 'Enrich: Core Enrichers (Default)',
-      shortLabel: 'Core Enrichers',
+      tag: 'Core',
       enrichers: ['temporal', 'terminology_kb', 'note_rag', 'overflow_lookup']
     },
     {
       id: 'baseline',
-      label: 'Enrich: None (Verbatim Only)',
-      shortLabel: 'Verbatim Only',
+      tag: 'None',
       enrichers: []
     },
     {
       id: 'full-enriched',
-      label: 'Enrich: Core + Guidelines [K1]',
-      shortLabel: 'Core + Guidelines',
+      tag: 'All',
       enrichers: ['temporal', 'terminology_kb', 'note_rag', 'overflow_lookup', 'guideline_kb']
     },
     {
       id: 'rag-overflow',
-      label: 'Enrich: Note RAG + Overflow',
-      shortLabel: 'RAG + Overflow',
+      tag: 'RAG+Overflow',
       enrichers: ['note_rag', 'overflow_lookup']
     },
     {
       id: 'terminology',
-      label: 'Enrich: CIEL & Standards KB',
-      shortLabel: 'Terminology KB',
+      tag: 'Term KB',
       enrichers: ['terminology_kb']
     },
     {
       id: 'temporal',
-      label: 'Enrich: Temporal & Trends',
-      shortLabel: 'Temporal',
+      tag: 'Temporal',
       enrichers: ['temporal']
     },
     {
       id: 'temporal-terminology',
-      label: 'Enrich: Temporal + Terminology',
-      shortLabel: 'Temporal + Term',
+      tag: 'Temp+Term',
       enrichers: ['temporal', 'terminology_kb']
     }
   ];
@@ -210,11 +228,14 @@
   let selectedProfile = 'core-enriched';
   let selectedEnrichers: string[] = [...PROFILE_PRESET_MAP['core-enriched'].enrichers];
   let userChangedEnrichment = false;
+  let enrichMenuOpen = false;
+  let enrichMenuWrapEl: HTMLElement | undefined;
   let activePersona = 'alex';
   let targetBudgetTokens: number | null = null;
   let excludedSources: Record<string, boolean> = {};
 
   $: effectiveBudgetOverride = targetBudgetTokens ?? BUDGET_TAG_MAP[selectedBudgetTag] ?? null;
+  $: enrichmentSummaryTag = PROFILE_PRESET_MAP[selectedProfile]?.tag ?? 'Custom';
   $: activeEnricherIds = Array.isArray(latestXWahs?.enrichers)
     ? (latestXWahs.enrichers as Array<{ enricher_id?: string }>)
         .map((e) => String(e?.enricher_id || '').trim())
@@ -598,16 +619,27 @@
     await refreshContextPreview(selectedModel, selectedBudgetTag, selectedProfile, selectedEnrichers);
   }
 
-  async function handleProfileChange(event?: Event) {
+  async function applyEnrichmentShortcut(presetId: 'core-enriched' | 'full-enriched' | 'baseline') {
+    if (isStreaming) return;
     userChangedEnrichment = true;
-    const nextProf = (event?.target as HTMLSelectElement | null)?.value ?? selectedProfile;
-    if (PROFILE_PRESET_MAP[nextProf]) {
-      selectedProfile = nextProf;
-      selectedEnrichers = [...PROFILE_PRESET_MAP[nextProf].enrichers];
-    } else {
-      selectedProfile = 'custom';
+    const nextEnrichers = [...PROFILE_PRESET_MAP[presetId].enrichers];
+    selectedProfile = presetId;
+    selectedEnrichers = nextEnrichers;
+    await refreshContextPreview(selectedModel, selectedBudgetTag, presetId, nextEnrichers);
+  }
+
+  function handleWindowMouseDown(event: MouseEvent) {
+    if (!enrichMenuOpen) return;
+    const target = event.target as Node | null;
+    if (enrichMenuWrapEl && target && !enrichMenuWrapEl.contains(target)) {
+      enrichMenuOpen = false;
     }
-    await refreshContextPreview(selectedModel, selectedBudgetTag, selectedProfile, selectedEnrichers);
+  }
+
+  function handleWindowKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && enrichMenuOpen) {
+      enrichMenuOpen = false;
+    }
   }
 
   async function toggleEnricherModule(enricherId: string) {
@@ -1021,8 +1053,10 @@
   </Col>
 </Row>
 
+<svelte:window on:mousedown={handleWindowMouseDown} on:keydown={handleWindowKeyDown} />
+
 <!-- Interactive Chart Scope & Model Controls Bar -->
-<Card class="mb-3 shadow-sm border-0" style="background: #f8fafc;">
+<Card class="mb-3 shadow-sm border-0" style="background: #f8fafc; position: relative; z-index: 10; overflow: visible;">
   <CardBody class="py-2 px-3">
     <Row class="align-items-center g-2">
       <Col lg="6" class="d-flex align-items-center flex-wrap gap-2">
@@ -1097,23 +1131,91 @@
           <option value="auto">Context: Auto</option>
         </Input>
 
-        <Input
-          type="select"
-          bsSize="sm"
-          bind:value={selectedProfile}
-          disabled={isStreaming}
-          on:change={handleProfileChange}
-          style="width: auto; max-width: 240px; font-size: 0.78rem;"
-          aria-label="Select enrichment options"
-          title="3. Modular clinical enrichment profile"
-        >
-          {#each PROFILE_PRESET_OPTIONS as preset}
-            <option value={preset.id}>{preset.label}</option>
-          {/each}
-          {#if selectedProfile === 'custom'}
-            <option value="custom">Enrich: Custom ({selectedEnrichers.length} modules)</option>
+        <div class="position-relative" bind:this={enrichMenuWrapEl}>
+          <button
+            type="button"
+            class="btn btn-sm bg-white border d-inline-flex align-items-center justify-content-between gap-2 text-dark"
+            style="font-size: 0.78rem; padding: 0.25rem 0.6rem; border-color: #dee2e6 !important; border-radius: 0.25rem;"
+            aria-label="Select enrichment options"
+            aria-haspopup="true"
+            aria-expanded={enrichMenuOpen}
+            disabled={isStreaming}
+            title="3. Enrichment options (multi-select modules)"
+            on:click={() => (enrichMenuOpen = !enrichMenuOpen)}
+          >
+            <span>Enrichers: {selectedEnrichers.length}/{ENRICHER_MODULE_OPTIONS.length} ({enrichmentSummaryTag})</span>
+            <span style="font-size: 0.7rem; opacity: 0.7;">{enrichMenuOpen ? '▲' : '▾'}</span>
+          </button>
+
+          {#if enrichMenuOpen}
+            <div
+              role="group"
+              aria-label="Enrichment Modules"
+              class="shadow border rounded-3 bg-white p-2"
+              style="position: absolute; right: 0; top: calc(100% + 4px); width: min(350px, 92vw); z-index: 1050;"
+            >
+              <div class="d-flex align-items-center justify-content-between pb-2 mb-1 border-bottom" style="font-size: 0.74rem;">
+                <span class="fw-bold text-secondary">
+                  Enrichment Options ({selectedEnrichers.length}/{ENRICHER_MODULE_OPTIONS.length})
+                </span>
+                <div class="d-inline-flex align-items-center gap-1">
+                  <button
+                    type="button"
+                    class="btn btn-sm py-0 px-2 {selectedProfile === 'core-enriched' ? 'btn-primary' : 'btn-outline-secondary'}"
+                    style="font-size: 0.7rem;"
+                    disabled={isStreaming}
+                    title="Reset to 4 Core enrichers (Default)"
+                    on:click={() => applyEnrichmentShortcut('core-enriched')}
+                  >
+                    Core
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-sm py-0 px-2 {selectedProfile === 'full-enriched' ? 'btn-primary' : 'btn-outline-secondary'}"
+                    style="font-size: 0.7rem;"
+                    disabled={isStreaming}
+                    title="Enable all 5 enrichers including Guidelines [K1]"
+                    on:click={() => applyEnrichmentShortcut('full-enriched')}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-sm py-0 px-2 {selectedProfile === 'baseline' ? 'btn-primary' : 'btn-outline-secondary'}"
+                    style="font-size: 0.7rem;"
+                    disabled={isStreaming}
+                    title="Clear all enrichers (Verbatim Only)"
+                    on:click={() => applyEnrichmentShortcut('baseline')}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              <div class="d-flex flex-column gap-1">
+                {#each ENRICHER_MODULE_OPTIONS as mod}
+                  {@const modActive = selectedEnrichers.includes(mod.id)}
+                  <label
+                    class="d-flex align-items-start gap-2 rounded px-2 py-1 mb-0"
+                    style="cursor: {isStreaming ? 'default' : 'pointer'}; background: {modActive ? '#f0f9ff' : 'transparent'}; font-size: 0.77rem;"
+                  >
+                    <input
+                      type="checkbox"
+                      class="form-check-input mt-1 flex-shrink-0"
+                      checked={modActive}
+                      disabled={isStreaming}
+                      on:change={() => toggleEnricherModule(mod.id)}
+                    />
+                    <span class="d-block">
+                      <span class="fw-semibold d-block text-dark" style="line-height: 1.25;">{mod.label}</span>
+                      <span class="text-muted d-block" style="font-size: 0.69rem; line-height: 1.25;">{mod.description}</span>
+                    </span>
+                  </label>
+                {/each}
+              </div>
+            </div>
           {/if}
-        </Input>
+        </div>
 
         <Button
           size="sm"
@@ -1143,24 +1245,6 @@
         </Button>
       </Col>
     </Row>
-
-    <div class="mt-2 pt-2 border-top d-flex flex-wrap align-items-center gap-2" style="font-size: 0.75rem;">
-      <span class="fw-semibold text-secondary">Enrichment Modules:</span>
-      {#each ENRICHER_MODULE_OPTIONS as mod}
-        {@const modActive = selectedEnrichers.includes(mod.id)}
-        <button
-          type="button"
-          class="btn btn-sm rounded-pill py-0 px-2"
-          aria-pressed={modActive}
-          disabled={isStreaming}
-          title={mod.description}
-          style="font-size: 0.73rem; font-weight: 600; border: 1px solid {modActive ? '#0284c7' : '#cbd5e1'}; background-color: {modActive ? '#e0f2fe' : '#ffffff'}; color: {modActive ? '#0369a1' : '#64748b'};"
-          on:click={() => toggleEnricherModule(mod.id)}
-        >
-          {modActive ? '✓ ' : '+ '}{mod.shortLabel}
-        </button>
-      {/each}
-    </div>
 
     {#if showTelemetry && latestXWahs?.condensation}
       <div class="mt-2 pt-2 border-top d-flex flex-wrap align-items-center gap-3" style="font-size: 0.75rem; color: #475569;">
