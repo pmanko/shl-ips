@@ -15,6 +15,7 @@
   import { buildRecordContext, type RecordContext } from '$lib/utils/recordContext';
   import { isRecordToolName, parseRecordToolArgs } from '$lib/config/chatTools';
   import { listRecordTypes, searchRecords } from '$lib/utils/recordTools';
+  import ChatMarkdown from '$lib/components/app/ChatMarkdown.svelte';
 
   const authService: IAuthService = getContext('authService');
   const fhirDataService: FHIRDataService = getContext('fhirDataService');
@@ -174,12 +175,18 @@
       <div class="message d-flex mb-2" class:justify-content-end={message.role === 'user'}>
         <div
           class="message-content rounded px-3 py-2"
+          class:plain-text={message.role === 'user'}
           class:bg-primary={message.role === 'user'}
           class:text-white={message.role === 'user'}
           class:bg-light={message.role !== 'user'}
         >
           <span class="visually-hidden">{message.role === 'user' ? 'You:' : 'Assistant:'}</span>
-          {message.content}
+          {#if message.role === 'user'}
+            {message.content}
+          {:else}
+            <!-- Models answer in markdown; drawn as elements, never as raw HTML -->
+            <ChatMarkdown text={message.content} />
+          {/if}
         </div>
       </div>
       {/if}
@@ -236,8 +243,10 @@
   }
   .message-content {
     max-width: 85%;
-    /* Plain text only for now: no markdown rendering, so no HTML injection surface */
-    white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  /* The user's own words are shown exactly as typed */
+  .plain-text {
+    white-space: pre-wrap;
   }
 </style>
