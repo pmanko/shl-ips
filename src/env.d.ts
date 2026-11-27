@@ -29,6 +29,7 @@ interface ImportMetaEnv {
     
     // Bearer tokens/api keys
     readonly AUTOCODER_API_KEY: string
+    readonly HEALTH_CHAT_BACKEND: string
     readonly LLM_API_KEY: string
     readonly LLM_API_BASE: string
     readonly LLM_MODEL: string
