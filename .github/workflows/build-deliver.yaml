@@ -27,6 +27,11 @@ jobs:
   build:
     needs: setup
     runs-on: ubuntu-latest
+    # Pushing to ghcr.io needs package write access. Stated here so the job does not depend on
+    # the repository's default workflow token permissions, which are read-only on new repos.
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         include:
